@@ -17,6 +17,7 @@ import {
 } from "./runtime-client";
 
 type View = "workspace" | "providers" | "security";
+type ThemeMode = "system" | "light" | "dark";
 
 const projects = [
   { name: "企业门户", path: "~/Code/enterprise-portal", branch: "main" },
@@ -37,12 +38,30 @@ export function App() {
   const [apiKey, setApiKey] = useState("");
   const [saved, setSaved] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeSnapshot>({ status: "stopped", pid: null, binary: "codex", lastError: null });
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem("kunlun-theme");
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
 
   useEffect(() => {
     void getRuntimeStatus().then(setRuntime).catch((error: unknown) => {
       setRuntime({ status: "error", pid: null, binary: "codex", lastError: String(error) });
     });
   }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const applyTheme = () => {
+      const resolved = theme === "system" ? (media.matches ? "light" : "dark") : theme;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.dataset.themeMode = theme;
+      if (theme === "system") localStorage.removeItem("kunlun-theme");
+      else localStorage.setItem("kunlun-theme", theme);
+    };
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [theme]);
 
   useEffect(() => {
     void loadProviderConfig().then((config) => {
@@ -66,19 +85,29 @@ export function App() {
           <span className="traffic green" />
         </div>
         <div className="titlebar-name">昆仑增长</div>
-        <button
-          className={`runtime-pill ${runtime.status}`}
-          title={runtime.lastError ?? `Runtime: ${runtime.binary}`}
-          onClick={() => {
-            const action = runtime.status === "ready" ? stopRuntime : startRuntime;
-            setRuntime((current) => ({ ...current, status: "starting" }));
-            void action().then(setRuntime).catch((error: unknown) => {
-              setRuntime({ status: "error", pid: null, binary: runtime.binary, lastError: String(error) });
-            });
-          }}
-        >
-          <span /> Runtime {runtime.status}
-        </button>
+        <div className="titlebar-actions">
+          <label className="theme-control" title="界面主题">
+            <span aria-hidden="true">◐</span>
+            <select value={theme} onChange={(event) => setTheme(event.target.value as ThemeMode)} aria-label="界面主题">
+              <option value="system">跟随系统</option>
+              <option value="light">日间</option>
+              <option value="dark">夜间</option>
+            </select>
+          </label>
+          <button
+            className={`runtime-pill ${runtime.status}`}
+            title={runtime.lastError ?? `Runtime: ${runtime.binary}`}
+            onClick={() => {
+              const action = runtime.status === "ready" ? stopRuntime : startRuntime;
+              setRuntime((current) => ({ ...current, status: "starting" }));
+              void action().then(setRuntime).catch((error: unknown) => {
+                setRuntime({ status: "error", pid: null, binary: runtime.binary, lastError: String(error) });
+              });
+            }}
+          >
+            <span /> Runtime {runtime.status}
+          </button>
+        </div>
       </header>
 
       <div className="app-layout">
