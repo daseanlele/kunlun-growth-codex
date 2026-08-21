@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kunlungrowth.cn/schemas/codex/managed-config.schema.json",
+  "title": "Kunlun Growth managed configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "organization", "provider", "security", "features", "locks"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "organization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "baseUrl", "model", "authMethod"],
+      "properties": {
+        "protocol": { "enum": ["openai", "azure-openai", "openai-compatible"] },
+        "baseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "model": { "type": "string" },
+        "authMethod": { "enum": ["api-key", "oauth", "managed-token"] },
+        "credentialRef": { "type": "string" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shellApproval", "fileWriteScope", "networkMode", "allowedDomains"],
+      "properties": {
+        "shellApproval": { "enum": ["always", "on-risk", "never"] },
+        "fileWriteScope": { "enum": ["workspace-only", "ask-outside-workspace"] },
+        "networkMode": { "enum": ["disabled", "allowlist", "unrestricted"] },
+        "allowedDomains": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mcp", "customSkills", "telemetry"],
+      "properties": {
+        "mcp": { "type": "boolean" },
+        "customSkills": { "type": "boolean" },
+        "telemetry": { "type": "boolean" }
+      }
+    },
+    "locks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "kunlun-growth-codex",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "protocol:generate": "node scripts/generate-protocol.mjs",
+    "tauri": "tauri",
+    "desktop:dev": "npm run runtime:prepare && tauri dev",
+    "desktop:build": "npm run runtime:prepare && tauri build",
+    "mac:dev": "npm run desktop:dev",
+    "mac:build": "npm run runtime:prepare && tauri build",
+    "windows:dev": "npm run desktop:dev",
+    "windows:build": "npm run runtime:prepare && tauri build --bundles nsis,msi",
+    "harmony:check": "node scripts/check-harmony.mjs"
+  },
+  "dependencies": {
+    "@openai/codex": "^0.149.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-store": "^2.4.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

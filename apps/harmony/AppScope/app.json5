@@ -1,0 +1,8 @@
+{
+  "app": {
+    "bundleName": "cn.kunlungrowth.codex",
+    "vendor": "Kunlun Growth Contributors",
+    "versionCode": 1000000,
+    "versionName": "0.1.0"
+  }
+}

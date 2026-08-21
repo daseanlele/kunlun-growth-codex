@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "organization": {
+    "id": "example-corp",
+    "displayName": "示例企业"
+  },
+  "provider": {
+    "protocol": "openai-compatible",
+    "baseUrl": "https://ai.example.com/v1",
+    "model": "company-coding-model",
+    "authMethod": "managed-token"
+  },
+  "security": {
+    "shellApproval": "always",
+    "fileWriteScope": "workspace-only",
+    "networkMode": "allowlist",
+    "allowedDomains": ["git.example.com", "packages.example.com"]
+  },
+  "features": {
+    "mcp": true,
+    "customSkills": true,
+    "telemetry": false
+  },
+  "locks": [
+    "provider.baseUrl",
+    "provider.authMethod",
+    "security.networkMode"
+  ]
+}
+

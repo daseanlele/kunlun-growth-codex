@@ -1,0 +1,48 @@
+name: macOS
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run harmony:check
+      - name: Check Rust shell
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  unsigned-bundle:
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+      - name: Build unsigned universal application
+        run: npm run mac:build
+        env:
+          APPLE_SIGNING_IDENTITY: "-"

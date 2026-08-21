@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "昆仑增长",
+  "version": "0.1.0",
+  "identifier": "cn.kunlungrowth.codex",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "昆仑增长",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 720,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#07090d",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": ["resources/runtime/**/*"],
+    "category": "DeveloperTool",
+    "copyright": "Copyright © 2026 Kunlun Growth Contributors",
+    "shortDescription": "昆仑增长企业 AI 工作台",
+    "longDescription": "面向企业 AI 落地的跨平台 Codex 桌面工作台，支持自主配置 API、认证与安全策略。",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "entitlements/EnterpriseCodex.entitlements",
+      "hardenedRuntime": true,
+      "signingIdentity": null
+    }
+  }
+}
