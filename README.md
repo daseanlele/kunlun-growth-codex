@@ -27,6 +27,8 @@ npm run harmony:check
 npm run protocol:generate
 ```
 
+运行过 `npm run build` 后，也可以直接双击仓库根目录的 `index.html`；它会打开不依赖本地服务器的 `dist/offline.html` 单文件预览。
+
 桌面端：
 
 ```bash

@@ -2,7 +2,19 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  base: "./",
+  plugins: [
+    {
+      name: "strip-file-preview-redirect",
+      transformIndexHtml: {
+        order: "pre",
+        handler(html) {
+          return html.replace(/<!-- file-preview:start -->[\s\S]*?<!-- file-preview:end -->/, "");
+        },
+      },
+    },
+    react(),
+  ],
   clearScreen: false,
   server: {
     port: 1420,
