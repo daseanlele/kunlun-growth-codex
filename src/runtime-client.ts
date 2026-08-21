@@ -2,11 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { RuntimeStatus } from "./domain/agent-events";
 import type { ProviderProtocol } from "./domain/enterprise-config";
+import type { RuntimeEngine, RuntimeSession } from "./domain/runtime";
 
 export interface RuntimeSnapshot {
   status: RuntimeStatus;
   pid: number | null;
   binary: string;
+  engine: RuntimeEngine;
+  available?: boolean;
+  version?: string | null;
   lastError: string | null;
 }
 
@@ -29,6 +33,8 @@ const webFallback: RuntimeSnapshot = {
   status: "stopped",
   pid: null,
   binary: "codex",
+  engine: "codex",
+  available: true,
   lastError: null,
 };
 
@@ -41,9 +47,9 @@ export async function getRuntimeStatus(): Promise<RuntimeSnapshot> {
   return invoke<RuntimeSnapshot>("runtime_status");
 }
 
-export async function startRuntime(): Promise<RuntimeSnapshot> {
-  if (!isTauri()) return { ...webFallback, status: "ready" };
-  return invoke<RuntimeSnapshot>("start_runtime");
+export async function startRuntime(engine: RuntimeEngine = "codex"): Promise<RuntimeSnapshot> {
+  if (!isTauri()) return { ...webFallback, engine, binary: engine === "codex" ? "codex" : "dsh", status: "ready" };
+  return invoke<RuntimeSnapshot>("start_runtime", { engine });
 }
 
 export async function stopRuntime(): Promise<RuntimeSnapshot> {
@@ -61,14 +67,39 @@ export async function saveProviderConfig(config: ProviderConfigPayload, apiKey: 
   return invoke<ProviderConfigPayload>("save_provider_config", { config, apiKey: apiKey || null });
 }
 
-export async function createAgentThread(cwd: string, model?: string): Promise<AppServerMessage> {
+export async function createAgentThread(cwd: string, model?: string, engine: RuntimeEngine = "codex"): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { thread: { id: "web-preview-thread" } } };
-  return invoke<AppServerMessage>("create_thread", { cwd, model: model || null });
+  return invoke<AppServerMessage>("create_thread", { cwd, model: model || null, engine });
 }
 
 export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { turn: { id: "web-preview-turn" } } };
   return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null });
+}
+
+export async function listAgentThreads(engine: RuntimeEngine = "codex"): Promise<RuntimeSession[]> {
+  if (!isTauri()) return [];
+  const response = await invoke<AppServerMessage>("list_threads", { engine });
+  const source = (response.result ?? response) as Record<string, unknown>;
+  const rows = (source.data ?? source.threads) as Array<Record<string, unknown>> | undefined;
+  return (rows ?? []).map((thread) => ({
+    id: String(thread.id ?? ""),
+    engine,
+    title: String(thread.name ?? thread.title ?? "未命名任务"),
+    cwd: String(thread.cwd ?? ""),
+    updatedAt: String(thread.updatedAt ?? thread.updated_at ?? new Date().toISOString()),
+    status: "idle" as const,
+  })).filter((thread) => thread.id.length > 0);
+}
+
+export async function readAgentThread(threadId: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { thread: { id: threadId, turns: [] } } };
+  return invoke<AppServerMessage>("read_thread", { threadId });
+}
+
+export async function interruptAgentTurn(threadId: string, turnId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("interrupt_turn", { threadId, turnId });
 }
 
 export async function respondToApproval(id: string | number, decision: "accept" | "decline"): Promise<void> {

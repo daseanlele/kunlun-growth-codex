@@ -1,370 +1,110 @@
 import { useEffect, useMemo, useState } from "react";
-import { defaultConfig, type ProviderProtocol } from "./domain/enterprise-config";
 import { open } from "@tauri-apps/plugin-dialog";
-import {
-  createAgentThread,
-  getRuntimeStatus,
-  loadProviderConfig,
-  onAppServerNotification,
-  onAppServerRequest,
-  respondToApproval,
-  saveProviderConfig,
-  startAgentTurn,
-  startRuntime,
-  stopRuntime,
-  type AppServerMessage,
-  type RuntimeSnapshot,
-} from "./runtime-client";
+import { defaultConfig, type ProviderProtocol } from "./domain/enterprise-config";
+import { normalizeRuntimeEvent, runtimeCatalog, type RuntimeEngine, type RuntimeSession, type TimelineEntry } from "./domain/runtime";
+import { createAgentThread, getRuntimeStatus, listAgentThreads, loadProviderConfig, onAppServerNotification, onAppServerRequest, respondToApproval, saveProviderConfig, startAgentTurn, startRuntime, stopRuntime, type AppServerMessage, type RuntimeSnapshot } from "./runtime-client";
 
 type View = "workspace" | "providers" | "security";
 type ThemeMode = "system" | "light" | "dark";
-
-const projects = [
-  { name: "企业门户", path: "~/Code/enterprise-portal", branch: "main" },
-  { name: "模型网关", path: "~/Code/ai-gateway", branch: "feat/audit" },
-];
-
-const activity = [
-  { icon: "✓", title: "运行环境已就绪", detail: "Codex App Server 等待连接", tone: "success" },
-  { icon: "⌘", title: "安全策略已加载", detail: "命令执行需要逐次审批", tone: "neutral" },
-  { icon: "◇", title: "企业配置", detail: "本地开发模式 · 未托管", tone: "neutral" },
-];
+const demoSessions: RuntimeSession[] = [{ id: "welcome", engine: "codex", title: "欢迎使用昆仑增长", cwd: "", updatedAt: new Date().toISOString(), status: "idle" }];
+const initialRuntime: RuntimeSnapshot = { status: "stopped", pid: null, binary: "codex", engine: "codex", available: true, lastError: null };
 
 export function App() {
   const [view, setView] = useState<View>("workspace");
-  const [baseUrl, setBaseUrl] = useState(defaultConfig.provider.baseUrl);
+  const [engine, setEngine] = useState<RuntimeEngine>("codex");
+  const [runtime, setRuntime] = useState<RuntimeSnapshot>(initialRuntime);
+  const [sessions, setSessions] = useState<RuntimeSession[]>(demoSessions);
+  const [activeSession, setActiveSession] = useState("welcome");
+  const [cwd, setCwd] = useState("");
   const [model, setModel] = useState(defaultConfig.provider.model);
+  const [baseUrl, setBaseUrl] = useState(defaultConfig.provider.baseUrl);
   const [protocol, setProtocol] = useState<ProviderProtocol>(defaultConfig.provider.protocol);
   const [apiKey, setApiKey] = useState("");
   const [saved, setSaved] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeSnapshot>({ status: "stopped", pid: null, binary: "codex", lastError: null });
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem("kunlun-theme");
-    return saved === "light" || saved === "dark" ? saved : "system";
-  });
+  const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem("kunlun-theme") as ThemeMode | null) ?? "system");
 
   useEffect(() => {
-    void getRuntimeStatus().then(setRuntime).catch((error: unknown) => {
-      setRuntime({ status: "error", pid: null, binary: "codex", lastError: String(error) });
-    });
+    void getRuntimeStatus().then((snapshot) => { setRuntime(snapshot); setEngine(snapshot.engine); }).catch((error: unknown) => setRuntime({ ...initialRuntime, status: "error", lastError: String(error) }));
+    void loadProviderConfig().then((config) => { setBaseUrl(config.baseUrl); setModel(config.model); setProtocol(config.protocol); });
   }, []);
-
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: light)");
-    const applyTheme = () => {
-      const resolved = theme === "system" ? (media.matches ? "light" : "dark") : theme;
-      document.documentElement.dataset.theme = resolved;
-      document.documentElement.dataset.themeMode = theme;
-      if (theme === "system") localStorage.removeItem("kunlun-theme");
-      else localStorage.setItem("kunlun-theme", theme);
-    };
-    applyTheme();
-    media.addEventListener("change", applyTheme);
-    return () => media.removeEventListener("change", applyTheme);
+    const apply = () => { document.documentElement.dataset.theme = theme === "system" ? (media.matches ? "light" : "dark") : theme; if (theme === "system") localStorage.removeItem("kunlun-theme"); else localStorage.setItem("kunlun-theme", theme); };
+    apply(); media.addEventListener("change", apply); return () => media.removeEventListener("change", apply);
   }, [theme]);
 
-  useEffect(() => {
-    void loadProviderConfig().then((config) => {
-      setBaseUrl(config.baseUrl);
-      setModel(config.model);
-      setProtocol(config.protocol);
-    });
-  }, []);
+  async function activateEngine(next: RuntimeEngine) {
+    if (next === engine) return;
+    if (runtime.status === "ready") await stopRuntime();
+    setEngine(next); setRuntime({ ...initialRuntime, engine: next, binary: next === "codex" ? "codex" : "dsh-acp" });
+    if (next === "deepseek-harness" && baseUrl === "https://api.openai.com/v1") {
+      setProtocol("openai-compatible"); setBaseUrl("https://api.deepseek.com"); if (!model) setModel("deepseek-v4-flash");
+    } else if (next === "codex" && baseUrl === "https://api.deepseek.com") {
+      setProtocol("openai"); setBaseUrl("https://api.openai.com/v1"); if (model === "deepseek-v4-flash") setModel("");
+    }
+    setSessions(demoSessions.map((session) => ({ ...session, engine: next }))); setActiveSession("welcome");
+  }
+  async function toggleRuntime() {
+    setRuntime((current) => ({ ...current, status: "starting" }));
+    try {
+      const snapshot = runtime.status === "ready" ? await stopRuntime() : await startRuntime(engine);
+      setRuntime(snapshot);
+      if (snapshot.status === "ready") { const loaded = await listAgentThreads(engine).catch(() => []); if (loaded.length) setSessions(loaded); }
+    } catch (error) { setRuntime((current) => ({ ...current, status: "error", available: false, lastError: String(error) })); }
+  }
 
-  const canSave = useMemo(
-    () => baseUrl.startsWith("https://") && model.trim().length > 0,
-    [baseUrl, model],
-  );
-
-  return (
-    <main className="window-shell">
-      <header className="titlebar" data-tauri-drag-region>
-        <div className="traffic-lights" aria-hidden="true">
-          <span className="traffic red" />
-          <span className="traffic yellow" />
-          <span className="traffic green" />
-        </div>
-        <div className="titlebar-name">昆仑增长</div>
-        <div className="titlebar-actions">
-          <label className="theme-control" title="界面主题">
-            <span aria-hidden="true">◐</span>
-            <select value={theme} onChange={(event) => setTheme(event.target.value as ThemeMode)} aria-label="界面主题">
-              <option value="system">跟随系统</option>
-              <option value="light">日间</option>
-              <option value="dark">夜间</option>
-            </select>
-          </label>
-          <button
-            className={`runtime-pill ${runtime.status}`}
-            title={runtime.lastError ?? `Runtime: ${runtime.binary}`}
-            onClick={() => {
-              const action = runtime.status === "ready" ? stopRuntime : startRuntime;
-              setRuntime((current) => ({ ...current, status: "starting" }));
-              void action().then(setRuntime).catch((error: unknown) => {
-                setRuntime({ status: "error", pid: null, binary: runtime.binary, lastError: String(error) });
-              });
-            }}
-          >
-            <span /> Runtime {runtime.status}
-          </button>
-        </div>
-      </header>
-
-      <div className="app-layout">
-        <aside className="sidebar">
-          <div className="brand">
-            <div className="brand-mark">昆</div>
-            <div><strong>昆仑增长</strong><small>企业 AI 工作台</small></div>
-          </div>
-
-          <nav aria-label="主导航">
-            <button className={view === "workspace" ? "active" : ""} onClick={() => setView("workspace")}>
-              <span>⌘</span>工作台
-            </button>
-            <button className={view === "providers" ? "active" : ""} onClick={() => setView("providers")}>
-              <span>⌁</span>模型服务
-            </button>
-            <button className={view === "security" ? "active" : ""} onClick={() => setView("security")}>
-              <span>◈</span>安全策略
-            </button>
-          </nav>
-
-          <section className="project-list">
-            <div className="section-label">最近项目</div>
-            {projects.map((project, index) => (
-              <button className={index === 0 && view === "workspace" ? "project active-project" : "project"} key={project.name}>
-                <span className="folder">▰</span>
-                <span><strong>{project.name}</strong><small>{project.branch}</small></span>
-              </button>
-            ))}
-          </section>
-
-          <div className="sidebar-footer">
-            <div className="avatar">本</div>
-            <div><strong>本地开发者</strong><small>未连接企业账号</small></div>
-          </div>
-        </aside>
-
-        {view === "workspace" && <Workspace runtime={runtime} model={model} onRuntime={setRuntime} />}
-        {view === "providers" && (
-          <ProviderSettings
-            baseUrl={baseUrl}
-            model={model}
-            protocol={protocol}
-            apiKey={apiKey}
-            saved={saved}
-            canSave={canSave}
-            onBaseUrl={setBaseUrl}
-            onModel={setModel}
-            onProtocol={setProtocol}
-            onApiKey={setApiKey}
-            onSave={() => {
-              void saveProviderConfig({ protocol, baseUrl, model, authMethod: "api-key", credentialRef: null }, apiKey)
-                .then(() => {
-                  setApiKey("");
-                  setSaved(true);
-                  window.setTimeout(() => setSaved(false), 2200);
-                });
-            }}
-          />
-        )}
-        {view === "security" && <SecuritySettings />}
-      </div>
-    </main>
-  );
+  return <main className="window-shell">
+    <header className="titlebar" data-tauri-drag-region><div className="window-controls" aria-hidden="true"><i /><i /><i /></div><strong>昆仑增长</strong><div className="title-actions"><label className="compact-select">◐<select value={theme} onChange={(event) => setTheme(event.target.value as ThemeMode)}><option value="system">跟随系统</option><option value="light">日间</option><option value="dark">夜间</option></select></label><button className={`runtime-status ${runtime.status}`} onClick={() => void toggleRuntime()} title={runtime.lastError ?? runtime.binary}><i />{runtimeCatalog[engine].shortLabel} · {runtime.status}</button></div></header>
+    <div className="app-frame">
+      <aside className="task-sidebar">
+        <div className="brand"><span>昆</span><div><b>昆仑增长</b><small>企业 AI 开发工作台</small></div></div>
+        <button className="new-task" onClick={() => { setView("workspace"); setActiveSession("welcome"); }}>＋ 新建任务</button>
+        <nav className="main-nav"><button className={view === "workspace" ? "active" : ""} onClick={() => setView("workspace")}><span>⌘</span>任务</button><button className={view === "providers" ? "active" : ""} onClick={() => setView("providers")}><span>⌁</span>模型与内核</button><button className={view === "security" ? "active" : ""} onClick={() => setView("security")}><span>◈</span>企业策略</button></nav>
+        <div className="sidebar-label"><span>最近任务</span><button>•••</button></div>
+        <div className="session-list">{sessions.map((session) => <button key={session.id} className={activeSession === session.id ? "active" : ""} onClick={() => { setActiveSession(session.id); setView("workspace"); }}><i className={session.status} /><span><b>{session.title}</b><small>{session.cwd || runtimeCatalog[session.engine].label}</small></span></button>)}</div>
+        <div className="account"><span>本</span><div><b>本地工作区</b><small>数据保留在设备</small></div><button>⚙</button></div>
+      </aside>
+      {view === "workspace" && <Workspace engine={engine} runtime={runtime} model={model} cwd={cwd} onCwd={setCwd} activeSession={activeSession} onSession={(session) => { setActiveSession(session.id); setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]); }} onRuntime={setRuntime} />}
+      {view === "providers" && <ProviderSettings engine={engine} onEngine={(next) => void activateEngine(next)} baseUrl={baseUrl} model={model} protocol={protocol} apiKey={apiKey} saved={saved} onBaseUrl={setBaseUrl} onModel={setModel} onProtocol={setProtocol} onApiKey={setApiKey} onSave={() => void saveProviderConfig({ protocol, baseUrl, model, authMethod: "api-key", credentialRef: null }, apiKey).then(() => { setApiKey(""); setSaved(true); window.setTimeout(() => setSaved(false), 1800); })} />}
+      {view === "security" && <SecuritySettings />}
+    </div>
+  </main>;
 }
 
-function Workspace({ runtime, model, onRuntime }: { runtime: RuntimeSnapshot; model: string; onRuntime(value: RuntimeSnapshot): void }) {
-  const [cwd, setCwd] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Array<{ role: "user" | "agent" | "system"; text: string }>>([]);
-  const [busy, setBusy] = useState(false);
-  const [approval, setApproval] = useState<AppServerMessage | null>(null);
-
+interface WorkspaceProps { engine: RuntimeEngine; runtime: RuntimeSnapshot; model: string; cwd: string; activeSession: string; onCwd(value: string): void; onSession(value: RuntimeSession): void; onRuntime(value: RuntimeSnapshot): void }
+function Workspace({ engine, runtime, model, cwd, onCwd, activeSession, onSession, onRuntime }: WorkspaceProps) {
+  const [threadId, setThreadId] = useState<string | null>(activeSession === "welcome" ? null : activeSession);
+  const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false); const [timeline, setTimeline] = useState<TimelineEntry[]>([]); const [approval, setApproval] = useState<AppServerMessage | null>(null); const [diff, setDiff] = useState("");
+  useEffect(() => { setThreadId(activeSession === "welcome" ? null : activeSession); }, [activeSession]);
   useEffect(() => {
     const cleanups: Array<() => void> = [];
-    void onAppServerNotification((message) => {
-      const method = message.method ?? "事件";
-      const params = message.params ?? {};
-      const text = extractAgentText(params) ?? `${method} · ${summarizeParams(params)}`;
-      setMessages((current) => [...current, { role: "agent" as const, text }].slice(-100));
-      if (method === "turn/completed") setBusy(false);
-    }).then((unlisten) => cleanups.push(unlisten));
-    void onAppServerRequest(setApproval).then((unlisten) => cleanups.push(unlisten));
-    return () => cleanups.forEach((cleanup) => cleanup());
+    void onAppServerNotification((message) => { const entry = normalizeRuntimeEvent(message); if (entry) setTimeline((current) => [...current, entry].slice(-200)); if (message.method?.includes("diff")) setDiff(String(message.params?.diff ?? "")); if (message.method === "turn/completed" || message.method === "turn/end") setBusy(false); }).then((cleanup) => cleanups.push(cleanup));
+    void onAppServerRequest(setApproval).then((cleanup) => cleanups.push(cleanup)); return () => cleanups.forEach((cleanup) => cleanup());
   }, []);
-
-  async function chooseProject(): Promise<void> {
-    const selected = await open({ directory: true, multiple: false, title: "选择企业代码项目" });
-    if (typeof selected === "string") {
-      setCwd(selected);
-      setThreadId(null);
-      setMessages([{ role: "system", text: `已打开项目：${selected}` }]);
-    }
-  }
-
-  async function sendTask(): Promise<void> {
-    const text = prompt.trim();
-    if (!text || !cwd || busy) return;
-    setBusy(true);
-    setPrompt("");
-    setMessages((current) => [...current, { role: "user", text }]);
+  async function chooseProject() { const selected = await open({ directory: true, multiple: false, title: "选择代码项目" }); if (typeof selected === "string") { onCwd(selected); setThreadId(null); setTimeline([]); } }
+  async function send() {
+    const text = prompt.trim(); if (!text || busy) return; if (!cwd) { await chooseProject(); return; }
+    setPrompt(""); setBusy(true); setTimeline((current) => [...current, { id: `user-${Date.now()}`, kind: "message", title: "你", text, status: "completed" }]);
     try {
-      let activeThread = threadId;
-      if (runtime.status !== "ready") onRuntime(await startRuntime());
-      if (!activeThread) {
-        const created = await createAgentThread(cwd, model);
-        activeThread = nestedId(created, "thread") ?? "";
-        if (!activeThread) throw new Error("App Server 未返回 thread ID");
-        setThreadId(activeThread);
-      }
-      await startAgentTurn(activeThread, cwd, text, model);
-    } catch (error) {
-      setMessages((current) => [...current, { role: "system", text: `任务启动失败：${String(error)}` }]);
-      setBusy(false);
-    }
+      if (runtime.status !== "ready") onRuntime(await startRuntime(engine));
+      let currentThread = threadId;
+      if (!currentThread) { const created = await createAgentThread(cwd, model, engine); currentThread = nestedId(created, engine === "codex" ? "thread" : "session"); if (!currentThread) throw new Error("运行时没有返回会话 ID"); setThreadId(currentThread); onSession({ id: currentThread, engine, title: text.slice(0, 28), cwd, updatedAt: new Date().toISOString(), status: "running" }); }
+      await startAgentTurn(currentThread, cwd, text, model);
+    } catch (error) { setTimeline((current) => [...current, { id: `error-${Date.now()}`, kind: "error", title: "任务启动失败", text: String(error), status: "failed" }]); setBusy(false); }
   }
-
-  return (
-    <section className="content workspace-view">
-      <div className="content-header">
-        <div><span className="eyebrow">工作台</span><h1>准备开始构建</h1><p>选择项目，然后把开发任务交给昆仑增长。</p></div>
-        <button className="primary-button" onClick={() => void chooseProject()}>＋ 打开项目</button>
-      </div>
-
-      <div className="hero-card">
-        <div className="hero-glow" />
-        <div className="hero-copy">
-          <span className="status-dot"><i /> 本地安全运行</span>
-          <h2>代码留在你的设备，<br />能力连接企业 AI。</h2>
-          <p>统一管理模型接入、执行审批和企业开发规范。</p>
-          <button className="primary-button large" onClick={() => void chooseProject()}>{cwd ? "更换项目" : "打开项目"} <span>→</span></button>
-        </div>
-        <div className="terminal-card">
-          <div className="terminal-top"><span /><span /><span /><em>agent activity</em></div>
-          <div className="terminal-body">
-            <p><b>›</b> 分析当前项目结构</p>
-            <p className="muted">  读取 42 个文件 · 1.8s</p>
-            <p><b>›</b> 准备修改认证模块</p>
-            <p className="approval">  ◇ 等待你的批准</p>
-            <span className="cursor" />
-          </div>
-        </div>
-      </div>
-
-      {cwd && (
-        <section className="panel agent-console">
-          <div className="panel-heading"><div><span className="eyebrow">当前项目</span><h3>{cwd}</h3></div><span className="badge">{runtime.status}</span></div>
-          <div className="message-list">
-            {messages.length === 0 && <p className="empty-state">输入一个真实开发任务，昆仑增长会在工作区沙箱中执行。</p>}
-            {messages.map((message, index) => <div className={`message ${message.role}`} key={`${index}-${message.text}`}>{message.text}</div>)}
-          </div>
-          <div className="task-composer">
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="例如：检查登录模块并修复现有测试失败" />
-            <button className="primary-button" disabled={busy || !prompt.trim()} onClick={() => void sendTask()}>{busy ? "执行中…" : "发送任务"}</button>
-          </div>
-        </section>
-      )}
-
-      {approval?.id !== undefined && (
-        <div className="approval-banner">
-          <div><strong>需要你的批准</strong><small>{approval.method ?? "敏感操作"}</small></div>
-          <button onClick={() => { void respondToApproval(approval.id!, "decline"); setApproval(null); }}>拒绝</button>
-          <button className="primary-button" onClick={() => { void respondToApproval(approval.id!, "accept"); setApproval(null); }}>允许一次</button>
-        </div>
-      )}
-
-      <div className="grid-two">
-        <section className="panel">
-          <div className="panel-heading"><div><span className="eyebrow">最近项目</span><h3>继续工作</h3></div><button className="text-button">查看全部</button></div>
-          {projects.map((project) => (
-            <button className="project-row" key={project.name}>
-              <span className="project-icon">▰</span>
-              <span><strong>{project.name}</strong><small>{project.path}</small></span>
-              <em>{project.branch}</em><b>›</b>
-            </button>
-          ))}
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading"><div><span className="eyebrow">系统状态</span><h3>安全且就绪</h3></div></div>
-          {activity.map((item) => (
-            <div className="activity-row" key={item.title}>
-              <span className={`activity-icon ${item.tone}`}>{item.icon}</span>
-              <span><strong>{item.title}</strong><small>{item.detail}</small></span>
-            </div>
-          ))}
-        </section>
-      </div>
-    </section>
-  );
+  const stats = useMemo(() => ({ commands: timeline.filter((item) => item.kind === "command").length, files: timeline.filter((item) => item.kind === "file").length }), [timeline]);
+  return <section className="workspace-grid"><section className="conversation-pane"><header className="pane-header"><div><small>{cwd ? compactPath(cwd) : "未选择项目"}</small><h1>{threadId ? "开发任务" : "新任务"}</h1></div><div><button className="ghost-button" onClick={() => void chooseProject()}>▰ {cwd ? "更换项目" : "打开项目"}</button><span className="engine-chip">{runtimeCatalog[engine].label}</span></div></header><div className={`timeline ${timeline.length === 0 ? "empty" : ""}`}>{timeline.length === 0 && <Welcome onPrompt={setPrompt} />}{timeline.map((entry, index) => <TimelineCard key={`${entry.id}-${index}`} entry={entry} />)}</div>{approval?.id !== undefined && <div className="approval-card"><span>!</span><div><b>运行时请求授权</b><small>{approval.method ?? "敏感操作"}</small></div><button onClick={() => { void respondToApproval(approval.id!, "decline"); setApproval(null); }}>拒绝</button><button className="primary" onClick={() => { void respondToApproval(approval.id!, "accept"); setApproval(null); }}>允许一次</button></div>}<div className="composer"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={cwd ? "描述任务，@ 引用文件，Shift+Enter 换行" : "先打开一个项目，然后开始任务"} /><div className="composer-tools"><span><button>＋</button><button>@</button><em>{model || "默认模型"}</em></span><button className="send-button" disabled={!prompt.trim() || busy} onClick={() => void send()}>{busy ? "■" : "↑"}</button></div></div></section><Inspector engine={engine} runtime={runtime} cwd={cwd} stats={stats} diff={diff} onProject={chooseProject} /></section>;
 }
 
-interface ProviderSettingsProps {
-  baseUrl: string;
-  model: string;
-  protocol: ProviderProtocol;
-  canSave: boolean;
-  saved: boolean;
-  apiKey: string;
-  onBaseUrl(value: string): void;
-  onModel(value: string): void;
-  onProtocol(value: ProviderProtocol): void;
-  onApiKey(value: string): void;
-  onSave(): void;
-}
+function Welcome({ onPrompt }: { onPrompt(value: string): void }) { return <div className="welcome"><div className="welcome-mark">昆</div><h2>今天想构建什么？</h2><p>选择一个代码项目，然后描述任务。昆仑增长会读取代码、制定计划、执行命令并向你展示每一步。</p><div className="suggestions"><button onClick={() => onPrompt("分析这个项目的架构，并指出最值得优先改进的三个问题")}>分析项目架构<span>→</span></button><button onClick={() => onPrompt("运行测试并修复当前失败项")}>修复测试失败<span>→</span></button><button onClick={() => onPrompt("审查当前未提交的代码变更")}>审查代码变更<span>→</span></button></div></div>; }
+function TimelineCard({ entry }: { entry: TimelineEntry }) { if (entry.kind === "message" && entry.title === "你") return <article className="user-message"><b>你</b><p>{entry.text}</p></article>; return <article className={`timeline-card ${entry.kind}`}><span className="timeline-icon">{iconFor(entry.kind)}</span><div><header><b>{entry.title}</b><em className={entry.status}>{entry.status === "running" ? "执行中" : entry.status === "failed" ? "失败" : "完成"}</em></header>{entry.detail && <small>{entry.detail}</small>}{entry.text && <pre>{entry.text}</pre>}{entry.paths?.map((path) => <code key={path}>{path}</code>)}</div></article>; }
+function Inspector({ engine, runtime, cwd, stats, diff, onProject }: { engine: RuntimeEngine; runtime: RuntimeSnapshot; cwd: string; stats: { commands: number; files: number }; diff: string; onProject(): Promise<void> }) { return <aside className="inspector-pane"><header><b>任务上下文</b><button>•••</button></header><section><small>运行环境</small><div className="runtime-card"><span className={runtime.status} /><div><b>{runtimeCatalog[engine].label}</b><em>{runtime.status === "ready" ? "已连接" : "按发送时自动启动"}</em></div></div></section><section><small>工作区</small><button className="context-row" onClick={() => void onProject()}><span>▰</span><div><b>{cwd ? compactPath(cwd) : "选择项目"}</b><em>{cwd || "尚未授权文件访问"}</em></div></button></section><section><small>本次任务</small><div className="metric-grid"><div><b>{stats.commands}</b><em>命令</em></div><div><b>{stats.files}</b><em>文件变更</em></div></div></section><section className="changes"><small>代码变更</small>{diff ? <pre>{diff}</pre> : <p>任务产生的 Diff 会显示在这里，提交前可逐项审阅。</p>}</section><section><small>可用能力</small><div className="capability-list">{Object.entries(runtimeCatalog[engine].capabilities).filter(([, value]) => value).map(([name]) => <span key={name}>✓ {capabilityName(name)}</span>)}</div></section></aside>; }
 
-function ProviderSettings(props: ProviderSettingsProps) {
-  return (
-    <section className="content settings-view">
-      <div className="content-header"><div><span className="eyebrow">配置</span><h1>模型服务</h1><p>连接 OpenAI、Azure OpenAI 或企业内部兼容网关。</p></div></div>
-      <section className="settings-card">
-        <div className="settings-title"><div className="settings-icon">⌁</div><div><h3>默认 Provider</h3><p>凭据将保存到系统安全凭据库，配置文件只保存引用。</p></div><span className="badge">本地配置</span></div>
-        <div className="form-grid">
-          <label>协议<select value={props.protocol} onChange={(event) => props.onProtocol(event.target.value as ProviderProtocol)}><option value="openai">OpenAI</option><option value="azure-openai">Azure OpenAI</option><option value="openai-compatible">OpenAI-compatible</option></select></label>
-          <label>模型<input value={props.model} onChange={(event) => props.onModel(event.target.value)} placeholder="例如：企业允许的模型 ID" /></label>
-          <label className="full">API Base URL<input value={props.baseUrl} onChange={(event) => props.onBaseUrl(event.target.value)} /><small>{props.baseUrl.startsWith("https://") ? "连接地址格式有效" : "生产环境仅允许 HTTPS"}</small></label>
-          <label className="full">API Key<div className="secret-field"><input type="password" value={props.apiKey} onChange={(event) => props.onApiKey(event.target.value)} placeholder="存入系统安全凭据库，不会写入配置文件" /><button type="button" onClick={props.onSave}>安全保存</button></div></label>
-        </div>
-        <div className="settings-actions"><button className="secondary-button">测试连接</button><button disabled={!props.canSave} className="primary-button" onClick={props.onSave}>{props.saved ? "已保存 ✓" : "保存配置"}</button></div>
-      </section>
-    </section>
-  );
-}
-
-function nestedId(message: AppServerMessage, kind: "thread" | "turn"): string | null {
-  const source = (message.result ?? message) as Record<string, unknown>;
-  const value = source[kind] as Record<string, unknown> | undefined;
-  return typeof value?.id === "string" ? value.id : null;
-}
-
-function extractAgentText(params: Record<string, unknown>): string | null {
-  const item = params.item as Record<string, unknown> | undefined;
-  const content = item?.content as Array<Record<string, unknown>> | undefined;
-  const text = content?.map((part) => part.text).filter((value): value is string => typeof value === "string").join("\n");
-  return text || (typeof item?.text === "string" ? item.text : null);
-}
-
-function summarizeParams(params: Record<string, unknown>): string {
-  const raw = JSON.stringify(params);
-  return raw.length > 180 ? `${raw.slice(0, 177)}…` : raw;
-}
-
-function SecuritySettings() {
-  return (
-    <section className="content settings-view">
-      <div className="content-header"><div><span className="eyebrow">企业治理</span><h1>安全策略</h1><p>高风险操作在 Rust 后端强制执行，前端不能绕过。</p></div></div>
-      <div className="policy-grid">
-        <Policy title="命令执行" value="始终审批" detail="每条 shell 命令执行前均需用户确认。" />
-        <Policy title="文件写入" value="仅工作区" detail="工作区外的写入始终阻止或单独审批。" />
-        <Policy title="网络访问" value="域名白名单" detail="只允许访问管理员批准的目标。" />
-        <Policy title="遥测" value="默认关闭" detail="不上传源码、提示词、Diff 或命令输出。" />
-      </div>
-    </section>
-  );
-}
-
-function Policy({ title, value, detail }: { title: string; value: string; detail: string }) {
-  return <section className="policy-card"><span className="lock">◈</span><div><small>{title}</small><h3>{value}</h3><p>{detail}</p></div><span className="managed">可托管</span></section>;
-}
+interface ProviderProps { engine: RuntimeEngine; baseUrl: string; model: string; protocol: ProviderProtocol; apiKey: string; saved: boolean; onEngine(value: RuntimeEngine): void; onBaseUrl(value: string): void; onModel(value: string): void; onProtocol(value: ProviderProtocol): void; onApiKey(value: string): void; onSave(): void }
+function ProviderSettings(props: ProviderProps) { return <section className="settings-page"><header><small>设置</small><h1>模型与代理内核</h1><p>每个任务绑定一套代理内核；模型凭据仅保存在系统安全凭据库。</p></header><div className="settings-section"><h2>代理内核</h2><div className="engine-options">{(["codex", "deepseek-harness"] as RuntimeEngine[]).map((item) => <button key={item} className={props.engine === item ? "active" : ""} onClick={() => props.onEngine(item)}><span>{item === "codex" ? "⌘" : "深"}</span><div><b>{runtimeCatalog[item].label}</b><small>{item === "codex" ? "完整 App Server、Diff、审批与 Skills" : "插件化 Agent Loop、Code Mode 与子代理"}</small></div><i>{props.engine === item ? "✓" : ""}</i></button>)}</div></div><div className="settings-section"><h2>模型服务</h2><div className="form-grid"><label>协议<select value={props.protocol} onChange={(event) => props.onProtocol(event.target.value as ProviderProtocol)}><option value="openai">OpenAI</option><option value="azure-openai">Azure OpenAI</option><option value="openai-compatible">OpenAI-compatible / DeepSeek</option></select></label><label>模型 ID<input value={props.model} onChange={(event) => props.onModel(event.target.value)} placeholder={props.engine === "codex" ? "gpt-5.6-terra" : "deepseek-v4-flash"} /></label><label className="full">API Base URL<input value={props.baseUrl} onChange={(event) => props.onBaseUrl(event.target.value)} /></label><label className="full">API Key<input type="password" value={props.apiKey} onChange={(event) => props.onApiKey(event.target.value)} placeholder="安全保存，不写入项目配置" /></label></div><div className="settings-actions"><button className="primary" disabled={!props.baseUrl.startsWith("https://")} onClick={props.onSave}>{props.saved ? "已保存 ✓" : "保存配置"}</button></div></div></section>; }
+function SecuritySettings() { return <section className="settings-page"><header><small>企业治理</small><h1>安全策略</h1><p>策略在桌面核心执行，网页界面无法绕过。</p></header><div className="policy-grid"><Policy title="命令执行" value="风险操作审批" detail="普通读取自动执行，写入、安装与系统命令需要批准。" /><Policy title="文件访问" value="仅当前工作区" detail="默认禁止访问项目目录之外的文件。" /><Policy title="网络访问" value="默认关闭" detail="按域名白名单为单次任务开放网络。" /><Policy title="凭据与审计" value="系统凭据库" detail="密钥不进入模型上下文，日志默认本地保存并脱敏。" /></div></section>; }
+function Policy({ title, value, detail }: { title: string; value: string; detail: string }) { return <article className="policy"><span>◈</span><div><small>{title}</small><h2>{value}</h2><p>{detail}</p></div><em>可托管</em></article>; }
+function nestedId(message: AppServerMessage, kind: "thread" | "session"): string | null { const source = (message.result ?? message) as Record<string, unknown>; const nested = source[kind] as Record<string, unknown> | undefined; return typeof nested?.id === "string" ? nested.id : typeof source.sessionId === "string" ? source.sessionId : null; }
+function compactPath(path: string) { return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path; }
+function iconFor(kind: TimelineEntry["kind"]) { return ({ message: "◆", reasoning: "◇", command: ">_", file: "±", tool: "⌁", plan: "☷", status: "✓", error: "!" })[kind]; }
+function capabilityName(name: string) { return ({ history: "会话恢复", approvals: "安全审批", diff: "Diff 审阅", plan: "任务计划", subagents: "子代理", codeMode: "Code Mode" } as Record<string, string>)[name] ?? name; }

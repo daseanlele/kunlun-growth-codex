@@ -1,5 +1,15 @@
 # 昆仑增长路线图
 
+## 0.2 双内核工作台
+
+- [x] Codex 式三栏工作区、任务列表、执行时间线与上下文检查器
+- [x] 统一 Runtime、Session、Timeline 与能力模型
+- [x] Codex App Server 历史会话接口和事件归一化
+- [x] DeepSeek Harness ACP 启动、会话与任务协议适配边界
+- [x] 命令、工具、Plan、文件变更与 Diff 展示模型
+- [ ] 随安装包捆绑并锁定 DeepSeek Harness Developer Preview 运行时
+- [ ] 完成两套真实运行时的端到端回归矩阵
+
 ## 0.1 开发者预览
 
 - [x] 品牌、跨平台桌面 UI 与 Tauri 核心

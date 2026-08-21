@@ -2,7 +2,7 @@
 
 面向企业 AI 落地的开源 Codex 工作台：一键安装，自主配置 API、模型和认证，并把命令审批、工作区隔离与企业策略放在本地可信边界中。
 
-> 当前版本：`0.1.1` 开发者预览。Windows/macOS 共用 Tauri 桌面核心；HarmonyOS 提供连接企业 Agent Gateway 的原生 ArkTS 伴生端。
+> 当前版本：`0.2.0` 双内核工作台预览。Windows/macOS 共用 Tauri 桌面核心，支持 Codex App Server 与 DeepSeek Harness ACP 适配；HarmonyOS 提供连接企业 Agent Gateway 的原生 ArkTS 伴生端。
 
 ## 已实现
 

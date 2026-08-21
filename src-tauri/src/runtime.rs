@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -17,6 +19,8 @@ pub struct RuntimeSnapshot {
     pub status: RuntimeStatus,
     pub pid: Option<u32>,
     pub binary: String,
+    pub engine: String,
+    pub available: bool,
     pub version: Option<String>,
     pub last_error: Option<String>,
 }
@@ -38,7 +42,7 @@ pub enum RuntimeError {
     AlreadyRunning,
     #[error("Codex App Server is not running")]
     NotRunning,
-    #[error("Unable to locate the bundled Codex runtime")]
+    #[error("Unable to locate the selected bundled agent runtime")]
     BinaryMissing,
     #[error("Unable to start Codex App Server: {0}")]
     StartFailed(#[from] std::io::Error),
@@ -53,6 +57,7 @@ struct RuntimeState {
     writer: Option<Arc<Mutex<ChildStdin>>>,
     status: RuntimeStatus,
     binary: String,
+    engine: String,
     version: Option<String>,
     last_error: Option<String>,
 }
@@ -73,6 +78,7 @@ impl Default for RuntimeManager {
                 writer: None,
                 status: RuntimeStatus::Stopped,
                 binary: "codex".to_string(),
+                engine: "codex".to_string(),
                 version: None,
                 last_error: None,
             }),
@@ -89,6 +95,8 @@ impl RuntimeManager {
                 status: RuntimeStatus::Error,
                 pid: None,
                 binary: "unknown".to_string(),
+                engine: "codex".to_string(),
+                available: false,
                 version: None,
                 last_error: Some("Runtime state lock was poisoned".to_string()),
             };
@@ -109,12 +117,14 @@ impl RuntimeManager {
             status: state.status,
             pid: state.child.as_ref().map(Child::id),
             binary: state.binary.clone(),
+            engine: state.engine.clone(),
+            available: true,
             version: state.version.clone(),
             last_error: state.last_error.clone(),
         }
     }
 
-    pub fn start(&self, app: &AppHandle) -> Result<RuntimeSnapshot, RuntimeError> {
+    pub fn start(&self, app: &AppHandle, engine: &str) -> Result<RuntimeSnapshot, RuntimeError> {
         {
             let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
             if state.child.is_some() {
@@ -124,16 +134,20 @@ impl RuntimeManager {
             state.last_error = None;
         }
 
-        let binary = resolve_binary(app).ok_or(RuntimeError::BinaryMissing)?;
+        let binary = resolve_binary(app, engine).ok_or(RuntimeError::BinaryMissing)?;
         let provider = config::load(app).map_err(RuntimeError::Protocol)?;
         let mut command = Command::new(&binary);
-        command.arg("app-server").arg("--stdio").arg("--strict-config");
+        if engine == "codex" {
+            command.arg("app-server").arg("--stdio").arg("--strict-config");
+        }
         if let Ok(config_dir) = app.path().app_config_dir() {
             let codex_home = config_dir.join("codex-home");
             std::fs::create_dir_all(&codex_home)?;
             command.env("CODEX_HOME", codex_home);
         }
-        apply_provider_config(&mut command, &provider)?;
+        apply_provider_config(&mut command, &provider, engine)?;
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = command.spawn()?;
@@ -144,6 +158,7 @@ impl RuntimeManager {
         {
             let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
             state.binary = binary.display().to_string();
+            state.engine = engine.to_string();
             state.version = detect_version(&binary);
             state.writer = Some(Arc::new(Mutex::new(stdin)));
             state.child = Some(child);
@@ -160,7 +175,7 @@ impl RuntimeManager {
                     "title": "昆仑增长桌面端",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "capabilities": null
+                "capabilities": if engine == "deepseek-harness" { json!({}) } else { Value::Null }
             }),
         ) {
             Ok(value) => value,
@@ -180,6 +195,10 @@ impl RuntimeManager {
         }
         let _ = app.emit("app-server-initialized", initialize);
         Ok(self.snapshot())
+    }
+
+    pub fn engine(&self) -> Result<String, RuntimeError> {
+        self.state.lock().map(|state| state.engine.clone()).map_err(|_| RuntimeError::StatePoisoned)
     }
 
     pub fn stop(&self) -> Result<RuntimeSnapshot, RuntimeError> {
@@ -321,8 +340,19 @@ fn spawn_stderr_reader(app: AppHandle, stderr: impl std::io::Read + Send + 'stat
     });
 }
 
-fn apply_provider_config(command: &mut Command, provider: &config::ProviderConfig) -> Result<(), RuntimeError> {
+fn apply_provider_config(command: &mut Command, provider: &config::ProviderConfig, engine: &str) -> Result<(), RuntimeError> {
     let api_key = config::read_api_key().map_err(RuntimeError::Protocol)?;
+    if engine == "deepseek-harness" {
+        if let Some(secret) = api_key {
+            command.env("DEEPSEEK_API_KEY", secret);
+        }
+        command.env("DEEPSEEK_BASE_URL", &provider.base_url);
+        if !provider.model.trim().is_empty() {
+            command.env("DSH_MODEL", &provider.model);
+        }
+        command.env("DSH_PERMISSION_MODE", "workspace-write");
+        return Ok(());
+    }
     if let Some(secret) = api_key.as_ref() {
         command.env("KUNLUN_GROWTH_API_KEY", secret);
     }
@@ -361,7 +391,18 @@ fn detect_version(binary: &Path) -> Option<String> {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn resolve_binary(app: &AppHandle) -> Option<PathBuf> {
+fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
+    if engine == "deepseek-harness" {
+        if let Some(path) = std::env::var_os("KUNLUN_GROWTH_DSH_BINARY").map(PathBuf::from) {
+            if path.is_file() { return Some(path); }
+        }
+        let executable = if cfg!(windows) { "dsh-acp.exe" } else { "dsh-acp" };
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let bundled = resource_dir.join("runtime").join("deepseek-harness").join(executable);
+            if bundled.is_file() { return Some(bundled); }
+        }
+        return None;
+    }
     if let Some(path) = std::env::var_os("KUNLUN_GROWTH_CODEX_BINARY").map(PathBuf::from) {
         if path.is_file() { return Some(path); }
     }

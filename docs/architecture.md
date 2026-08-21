@@ -6,9 +6,9 @@
 Windows / macOS React WebView
            │ typed Tauri IPC
            ▼
-Rust desktop core ── stdio JSON-RPC ── Codex App Server
-  │ policy / vault / approvals                 │
-  └──────────── HTTPS approved provider ───────┘
+Rust desktop core ── Runtime Adapter ─┬─ Codex App Server
+  │ policy / vault / approvals        └─ DeepSeek Harness ACP
+  └──────────── HTTPS approved providers ───────────────┘
 
 HarmonyOS ArkTS ── HTTPS + enterprise auth ── Agent Gateway
                                                  │
@@ -26,6 +26,8 @@ HarmonyOS ArkTS ── HTTPS + enterprise auth ── Agent Gateway
 ## App Server 生命周期
 
 桌面核心依次调用 `initialize`、`initialized`、`thread/start` 与 `turn/start`。上游请求和通知通过 Tauri 事件转发；命令执行与文件变更请求必须由用户或托管策略明确决策。
+
+DeepSeek Harness 通过独立的 ACP JSON-RPC stdio 适配器接入，使用 `session/new` 与 `session/prompt`。每个会话固定一个运行时内核；两套协议在进入界面前归一化为昆仑增长的 Timeline 事件，禁止共享进程状态或直接混写会话日志。
 
 ## 配置优先级
 
