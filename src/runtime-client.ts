@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { RuntimeStatus } from "./domain/agent-events";
 import type { ProviderProtocol } from "./domain/enterprise-config";
-import type { RuntimeEngine, RuntimeSession } from "./domain/runtime";
+import type { AgentModel, RuntimeEngine, RuntimeSession } from "./domain/runtime";
 
 export interface RuntimeSnapshot {
   status: RuntimeStatus;
@@ -72,9 +72,9 @@ export async function createAgentThread(cwd: string, model?: string, engine: Run
   return invoke<AppServerMessage>("create_thread", { cwd, model: model || null, engine });
 }
 
-export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string): Promise<AppServerMessage> {
+export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string, effort?: string): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { turn: { id: "web-preview-turn" } } };
-  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null });
+  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null, effort: effort || null });
 }
 
 export async function listAgentThreads(engine: RuntimeEngine = "codex"): Promise<RuntimeSession[]> {
@@ -95,6 +95,31 @@ export async function listAgentThreads(engine: RuntimeEngine = "codex"): Promise
 export async function readAgentThread(threadId: string): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { thread: { id: threadId, turns: [] } } };
   return invoke<AppServerMessage>("read_thread", { threadId });
+}
+
+export async function resumeAgentThread(threadId: string, cwd?: string, model?: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { thread: { id: threadId } } };
+  return invoke<AppServerMessage>("resume_thread", { threadId, cwd: cwd || null, model: model || null });
+}
+
+export async function listAgentModels(): Promise<AgentModel[]> {
+  if (!isTauri()) return [
+    { id: "gpt-5.6-terra", model: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", description: "平衡能力与成本", isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: ["low", "medium", "high", "xhigh"].map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort })) },
+    { id: "gpt-5.6-sol", model: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", description: "复杂任务旗舰模型", isDefault: false, defaultReasoningEffort: "low", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort })) },
+  ];
+  const response = await invoke<AppServerMessage>("list_models");
+  const source = (response.result ?? response) as Record<string, unknown>;
+  return Array.isArray(source.data) ? source.data as unknown as AgentModel[] : [];
+}
+
+export async function renameAgentThread(threadId: string, name: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_thread_name", { threadId, name });
+}
+
+export async function archiveAgentThread(threadId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("archive_thread", { threadId });
 }
 
 export async function interruptAgentTurn(threadId: string, turnId: string): Promise<void> {

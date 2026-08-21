@@ -66,12 +66,37 @@ fn read_thread(manager: State<'_, RuntimeManager>, thread_id: String) -> Result<
 }
 
 #[tauri::command]
+fn resume_thread(manager: State<'_, RuntimeManager>, thread_id: String, cwd: Option<String>, model: Option<String>) -> Result<Value, String> {
+    if manager.engine().map_err(|error| error.to_string())? == "deepseek-harness" {
+        return manager.request("session/load", json!({ "sessionId": thread_id, "cwd": cwd, "model": model })).map_err(|error| error.to_string());
+    }
+    manager.request("thread/resume", json!({ "threadId": thread_id, "cwd": cwd, "model": model })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_models(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
+    manager.request("model/list", json!({ "limit": 100, "includeHidden": false })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_thread_name(manager: State<'_, RuntimeManager>, thread_id: String, name: String) -> Result<Value, String> {
+    if name.trim().is_empty() { return Err("Thread name cannot be empty".to_string()); }
+    manager.request("thread/name/set", json!({ "threadId": thread_id, "name": name.trim() })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn archive_thread(manager: State<'_, RuntimeManager>, thread_id: String) -> Result<Value, String> {
+    manager.request("thread/archive", json!({ "threadId": thread_id })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn start_turn(
     manager: State<'_, RuntimeManager>,
     thread_id: String,
     cwd: String,
     text: String,
     model: Option<String>,
+    effort: Option<String>,
 ) -> Result<Value, String> {
     if manager.engine().map_err(|error| error.to_string())? == "deepseek-harness" {
         return manager
@@ -81,7 +106,8 @@ fn start_turn(
                     "sessionId": thread_id,
                     "prompt": [{ "type": "text", "text": text }],
                     "cwd": cwd,
-                    "model": model
+                    "model": model,
+                    "effort": effort
                 }),
             )
             .map_err(|error| error.to_string());
@@ -94,6 +120,7 @@ fn start_turn(
                 "input": [{ "type": "text", "text": text }],
                 "cwd": cwd,
                 "model": model.filter(|value| !value.trim().is_empty()),
+                "effort": effort.filter(|value| !value.trim().is_empty()),
                 "approvalPolicy": "unlessTrusted",
                 "sandboxPolicy": {
                     "type": "workspaceWrite",
@@ -145,6 +172,10 @@ pub fn run() {
             create_thread,
             list_threads,
             read_thread,
+            resume_thread,
+            list_models,
+            set_thread_name,
+            archive_thread,
             start_turn,
             interrupt_turn,
             respond_server_request,
