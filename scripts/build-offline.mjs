@@ -15,8 +15,8 @@ const css = await readFile(assetPath(styleMatch[1]), "utf8");
 
 html = html
   .replace('<script src="./file-preview.js"></script>', "")
-  .replace(scriptMatch[0], `<script type="module">${javascript}</script>`)
-  .replace(styleMatch[0], `<style>${css}</style>`);
+  .replace(scriptMatch[0], () => `<script type="module">${javascript}</script>`)
+  .replace(styleMatch[0], () => `<style>${css}</style>`);
 
 await writeFile(resolve(outputDirectory, "offline.html"), html, "utf8");
 console.log("Generated dist/offline.html for direct file preview.");
