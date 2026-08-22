@@ -30,7 +30,7 @@ HarmonyOS ArkTS ── HTTPS + enterprise auth ── Agent Gateway
 
 DeepSeek Harness 通过独立的 ACP JSON-RPC stdio 适配器接入，使用 `session/new` 与 `session/prompt`。每个会话固定一个运行时内核；两套协议在进入界面前归一化为昆仑增长的 Timeline 事件，禁止共享进程状态或直接混写会话日志。
 
-Claude 与 OpenAI-compatible 服务不会被错误地送入 Codex 的 Responses 协议。它们由 Rust 原生 HTTPS 适配器处理身份头、模型发现、SSE 流、取消和本地会话历史；模型档案可指定认证头名称，私密 Key 仍从系统凭据库注入请求而不落入 JSON 配置。用户显式引用的 `@相对路径` 会在可信核心中受限展开。原生工具可列目录、读文本文件、读 Git Diff，并可请求创建或覆盖 UTF-8 文本文件；所有路径和大小均在可信核心校验，写入前必须经过桌面端的逐次审批，且不允许删除或重命名。shell、网络、MCP 与子代理循环仍未对原生适配器开放，不允许模型直接获得 shell 或任意文件系统权限。
+Claude 与 OpenAI-compatible 服务不会被错误地送入 Codex 的 Responses 协议。它们由 Rust 原生 HTTPS 适配器处理身份头、模型发现、SSE 流、取消和本地会话历史；模型档案可指定认证头名称，私密 Key 仍从系统凭据库注入请求而不落入 JSON 配置。用户显式引用的 `@相对路径` 会在可信核心中受限展开。原生工具可列目录、读文本文件、读 Git Diff 与受限全文搜索，并可请求创建或覆盖 UTF-8 文本文件；所有路径和大小均在可信核心校验，写入前必须经过桌面端的逐次审批，且不允许删除或重命名。shell、网络、MCP 与子代理循环仍未对原生适配器开放，不允许模型直接获得 shell 或任意文件系统权限。
 
 ## 配置优先级
 
