@@ -381,7 +381,7 @@ fn apply_provider_config(
     provider: &config::ProviderConfig,
     engine: &str,
 ) -> Result<(), RuntimeError> {
-    let api_key = config::read_api_key().map_err(RuntimeError::Protocol)?;
+    let api_key = config::read_api_key(provider).map_err(RuntimeError::Protocol)?;
     if engine == "deepseek-harness" {
         if let Some(secret) = api_key {
             command.env("DEEPSEEK_API_KEY", secret);
@@ -391,6 +391,9 @@ fn apply_provider_config(
             command.env("DSH_MODEL", &provider.model);
         }
         command.env("DSH_PERMISSION_MODE", "workspace-write");
+        return Ok(());
+    }
+    if provider.adapter != "codex-responses" {
         return Ok(());
     }
     if let Some(secret) = api_key.as_ref() {

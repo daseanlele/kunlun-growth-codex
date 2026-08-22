@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { RuntimeStatus } from "./domain/agent-events";
-import type { ProviderProtocol } from "./domain/enterprise-config";
+import type { ProviderAdapter, ProviderProtocol } from "./domain/enterprise-config";
 import type { AgentModel, RuntimeEngine, RuntimeSession } from "./domain/runtime";
 
 export interface RuntimeSnapshot {
@@ -15,7 +15,11 @@ export interface RuntimeSnapshot {
 }
 
 export interface ProviderConfigPayload {
+  id: string;
+  providerId: string;
+  displayName: string;
   protocol: ProviderProtocol;
+  adapter: ProviderAdapter;
   baseUrl: string;
   model: string;
   authMethod: string;
@@ -71,6 +75,16 @@ export async function loadProviderConfig(): Promise<ProviderConfigPayload> {
 export async function saveProviderConfig(config: ProviderConfigPayload, apiKey: string): Promise<ProviderConfigPayload> {
   if (!isTauri()) return config;
   return invoke<ProviderConfigPayload>("save_provider_config", { config, apiKey: apiKey || null });
+}
+
+export async function listProviderProfiles(): Promise<ProviderConfigPayload[]> {
+  if (!isTauri()) return [{ ...defaultProvider }];
+  return invoke<ProviderConfigPayload[]>("list_provider_profiles");
+}
+
+export async function activateProviderProfile(profileId: string): Promise<ProviderConfigPayload> {
+  if (!isTauri()) return { ...defaultProvider, id: profileId };
+  return invoke<ProviderConfigPayload>("activate_provider_profile", { profileId });
 }
 
 export async function createAgentThread(cwd: string, model?: string, engine: RuntimeEngine = "codex"): Promise<AppServerMessage> {
@@ -326,7 +340,11 @@ export async function onAppServerRequest(handler: (message: AppServerMessage) =>
 }
 
 const defaultProvider: ProviderConfigPayload = {
+  id: "default",
+  providerId: "openai",
+  displayName: "OpenAI",
   protocol: "openai",
+  adapter: "codex-responses",
   baseUrl: "https://api.openai.com/v1",
   model: "",
   authMethod: "api-key",

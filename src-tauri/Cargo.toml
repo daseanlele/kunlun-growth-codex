@@ -24,3 +24,4 @@ tauri-plugin-store = "2"
 thiserror = "2"
 tracing = "0.1"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -1,4 +1,5 @@
 mod config;
+mod direct_adapter;
 mod runtime;
 mod workspace;
 
@@ -34,6 +35,7 @@ fn stop_runtime(manager: State<'_, RuntimeManager>) -> Result<RuntimeSnapshot, S
 
 #[tauri::command]
 fn create_thread(
+    app: AppHandle,
     manager: State<'_, RuntimeManager>,
     cwd: String,
     model: Option<String>,
@@ -47,12 +49,16 @@ fn create_thread(
             .request("session/new", json!({ "cwd": cwd, "model": model }))
             .map_err(|error| error.to_string());
     }
+    let configured_model = config::load(&app)
+        .ok()
+        .filter(|provider| provider.adapter == "codex-responses")
+        .and(model);
     manager
         .request(
             "thread/start",
             json!({
                 "cwd": cwd,
-                "model": model.filter(|value| !value.trim().is_empty()),
+                "model": configured_model.filter(|value| !value.trim().is_empty()),
                 "approvalPolicy": "unlessTrusted",
                 "sandbox": "workspaceWrite",
                 "serviceName": "kunlun_growth_desktop"
@@ -62,13 +68,24 @@ fn create_thread(
 }
 
 #[tauri::command]
-fn list_threads(manager: State<'_, RuntimeManager>, engine: String, search_term: Option<String>, archived: Option<bool>, is_pinned: Option<bool>) -> Result<Value, String> {
+fn list_threads(
+    manager: State<'_, RuntimeManager>,
+    engine: String,
+    search_term: Option<String>,
+    archived: Option<bool>,
+    is_pinned: Option<bool>,
+) -> Result<Value, String> {
     let (method, params) = if engine == "deepseek-harness" {
         ("session/list", json!({ "limit": 100 }))
     } else {
-        ("thread/list", json!({ "limit": 100, "searchTerm": search_term, "archived": archived, "isPinned": is_pinned }))
+        (
+            "thread/list",
+            json!({ "limit": 100, "searchTerm": search_term, "archived": archived, "isPinned": is_pinned }),
+        )
     };
-    manager.request(method, params).map_err(|error| error.to_string())
+    manager
+        .request(method, params)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -145,35 +162,73 @@ fn archive_thread(manager: State<'_, RuntimeManager>, thread_id: String) -> Resu
 }
 
 #[tauri::command]
-fn fork_thread(manager: State<'_, RuntimeManager>, thread_id: String, last_turn_id: Option<String>) -> Result<Value, String> {
-    manager.request("thread/fork", json!({ "threadId": thread_id, "lastTurnId": last_turn_id })).map_err(|error| error.to_string())
+fn fork_thread(
+    manager: State<'_, RuntimeManager>,
+    thread_id: String,
+    last_turn_id: Option<String>,
+) -> Result<Value, String> {
+    manager
+        .request(
+            "thread/fork",
+            json!({ "threadId": thread_id, "lastTurnId": last_turn_id }),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn set_thread_pinned(manager: State<'_, RuntimeManager>, thread_id: String, is_pinned: bool) -> Result<Value, String> {
-    manager.request("thread/metadata/update", json!({ "threadId": thread_id, "isPinned": is_pinned })).map_err(|error| error.to_string())
+fn set_thread_pinned(
+    manager: State<'_, RuntimeManager>,
+    thread_id: String,
+    is_pinned: bool,
+) -> Result<Value, String> {
+    manager
+        .request(
+            "thread/metadata/update",
+            json!({ "threadId": thread_id, "isPinned": is_pinned }),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn set_thread_goal(manager: State<'_, RuntimeManager>, thread_id: String, objective: String) -> Result<Value, String> {
+fn set_thread_goal(
+    manager: State<'_, RuntimeManager>,
+    thread_id: String,
+    objective: String,
+) -> Result<Value, String> {
     let objective = objective.trim();
-    if objective.is_empty() || objective.chars().count() > 4_000 { return Err("Goal must contain between 1 and 4000 characters".to_string()); }
-    manager.request("thread/goal/set", json!({ "threadId": thread_id, "objective": objective, "status": "active" })).map_err(|error| error.to_string())
+    if objective.is_empty() || objective.chars().count() > 4_000 {
+        return Err("Goal must contain between 1 and 4000 characters".to_string());
+    }
+    manager
+        .request(
+            "thread/goal/set",
+            json!({ "threadId": thread_id, "objective": objective, "status": "active" }),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn get_thread_goal(manager: State<'_, RuntimeManager>, thread_id: String) -> Result<Value, String> {
-    manager.request("thread/goal/get", json!({ "threadId": thread_id })).map_err(|error| error.to_string())
+    manager
+        .request("thread/goal/get", json!({ "threadId": thread_id }))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn start_review(manager: State<'_, RuntimeManager>, thread_id: String, delivery: String) -> Result<Value, String> {
-    if delivery != "inline" && delivery != "detached" { return Err("Unsupported review delivery".to_string()); }
+fn start_review(
+    manager: State<'_, RuntimeManager>,
+    thread_id: String,
+    delivery: String,
+) -> Result<Value, String> {
+    if delivery != "inline" && delivery != "detached" {
+        return Err("Unsupported review delivery".to_string());
+    }
     manager.request("review/start", json!({ "threadId": thread_id, "delivery": delivery, "target": { "type": "uncommittedChanges" } })).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn start_turn(
+    app: AppHandle,
     manager: State<'_, RuntimeManager>,
     thread_id: String,
     cwd: String,
@@ -184,6 +239,10 @@ fn start_turn(
     skill_name: Option<String>,
     skill_path: Option<String>,
 ) -> Result<Value, String> {
+    let provider = config::load(&app)?;
+    if provider.adapter != "codex-responses" {
+        return direct_adapter::start_turn(app, provider, thread_id, text, model);
+    }
     if manager.engine().map_err(|error| error.to_string())? == "deepseek-harness" {
         return manager
             .request(
@@ -200,9 +259,14 @@ fn start_turn(
     }
     let mut input = vec![json!({ "type": "text", "text": text })];
     for path in image_paths.unwrap_or_default() {
-        if !path.trim().is_empty() { input.push(json!({ "type": "localImage", "path": path })); }
+        if !path.trim().is_empty() {
+            input.push(json!({ "type": "localImage", "path": path }));
+        }
     }
-    if let (Some(name), Some(path)) = (skill_name.filter(|value| !value.trim().is_empty()), skill_path.filter(|value| !value.trim().is_empty())) {
+    if let (Some(name), Some(path)) = (
+        skill_name.filter(|value| !value.trim().is_empty()),
+        skill_path.filter(|value| !value.trim().is_empty()),
+    ) {
         input.push(json!({ "type": "skill", "name": name, "path": path }));
     }
     manager
@@ -227,10 +291,14 @@ fn start_turn(
 
 #[tauri::command]
 fn interrupt_turn(
+    app: AppHandle,
     manager: State<'_, RuntimeManager>,
     thread_id: String,
     turn_id: String,
 ) -> Result<Value, String> {
+    if config::load(&app)?.adapter != "codex-responses" {
+        return direct_adapter::cancel_turn(app, thread_id, turn_id);
+    }
     manager
         .request(
             "turn/interrupt",
@@ -240,8 +308,15 @@ fn interrupt_turn(
 }
 
 #[tauri::command]
-fn steer_turn(manager: State<'_, RuntimeManager>, thread_id: String, turn_id: String, text: String) -> Result<Value, String> {
-    if text.trim().is_empty() { return Err("Steering input cannot be empty".to_string()); }
+fn steer_turn(
+    manager: State<'_, RuntimeManager>,
+    thread_id: String,
+    turn_id: String,
+    text: String,
+) -> Result<Value, String> {
+    if text.trim().is_empty() {
+        return Err("Steering input cannot be empty".to_string());
+    }
     manager.request("turn/steer", json!({ "threadId": thread_id, "expectedTurnId": turn_id, "input": [{ "type": "text", "text": text.trim() }] })).map_err(|error| error.to_string())
 }
 
@@ -268,6 +343,16 @@ fn save_provider_config(
     api_key: Option<String>,
 ) -> Result<ProviderConfig, String> {
     config::save(&app, config, api_key)
+}
+
+#[tauri::command]
+fn list_provider_profiles(app: AppHandle) -> Result<Vec<ProviderConfig>, String> {
+    config::load_profiles(&app)
+}
+
+#[tauri::command]
+fn activate_provider_profile(app: AppHandle, profile_id: String) -> Result<ProviderConfig, String> {
+    config::activate_profile(&app, &profile_id)
 }
 
 #[tauri::command]
@@ -306,10 +391,25 @@ fn stop_terminal_command(terminals: State<'_, TerminalManager>, id: String) -> R
 }
 
 #[tauri::command]
-fn run_sandbox_terminal(manager: State<'_, RuntimeManager>, cwd: String, command: String, process_id: String, cols: u16, rows: u16) -> Result<Value, String> {
-    if command.trim().is_empty() || process_id.trim().is_empty() { return Err("Command and process id are required".to_string()); }
+fn run_sandbox_terminal(
+    manager: State<'_, RuntimeManager>,
+    cwd: String,
+    command: String,
+    process_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<Value, String> {
+    if command.trim().is_empty() || process_id.trim().is_empty() {
+        return Err("Command and process id are required".to_string());
+    }
     #[cfg(windows)]
-    let argv = json!(["powershell.exe", "-NoLogo", "-NoProfile", "-Command", command]);
+    let argv = json!([
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        command
+    ]);
     #[cfg(not(windows))]
     let argv = json!(["sh", "-lc", command]);
     manager.request("command/exec", json!({
@@ -326,18 +426,37 @@ fn run_sandbox_terminal(manager: State<'_, RuntimeManager>, cwd: String, command
 }
 
 #[tauri::command]
-fn write_sandbox_terminal(manager: State<'_, RuntimeManager>, process_id: String, delta_base64: String) -> Result<Value, String> {
-    manager.request("command/exec/write", json!({ "processId": process_id, "deltaBase64": delta_base64, "closeStdin": false })).map_err(|error| error.to_string())
+fn write_sandbox_terminal(
+    manager: State<'_, RuntimeManager>,
+    process_id: String,
+    delta_base64: String,
+) -> Result<Value, String> {
+    manager
+        .request(
+            "command/exec/write",
+            json!({ "processId": process_id, "deltaBase64": delta_base64, "closeStdin": false }),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn resize_sandbox_terminal(manager: State<'_, RuntimeManager>, process_id: String, cols: u16, rows: u16) -> Result<Value, String> {
+fn resize_sandbox_terminal(
+    manager: State<'_, RuntimeManager>,
+    process_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<Value, String> {
     manager.request("command/exec/resize", json!({ "processId": process_id, "size": { "cols": cols.max(40), "rows": rows.max(10) } })).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn stop_sandbox_terminal(manager: State<'_, RuntimeManager>, process_id: String) -> Result<Value, String> {
-    manager.request("command/exec/terminate", json!({ "processId": process_id })).map_err(|error| error.to_string())
+fn stop_sandbox_terminal(
+    manager: State<'_, RuntimeManager>,
+    process_id: String,
+) -> Result<Value, String> {
+    manager
+        .request("command/exec/terminate", json!({ "processId": process_id }))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -377,37 +496,52 @@ fn list_mcp_servers(
 
 #[tauri::command]
 fn read_account(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("account/read", json!({ "refreshToken": false })).map_err(|error| error.to_string())
+    manager
+        .request("account/read", json!({ "refreshToken": false }))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn start_account_login(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("account/login/start", json!({
-        "type": "chatgpt",
-        "appBrand": "codex",
-        "codexStreamlinedLogin": true,
-        "useHostedLoginSuccessPage": true
-    })).map_err(|error| error.to_string())
+    manager
+        .request(
+            "account/login/start",
+            json!({
+                "type": "chatgpt",
+                "appBrand": "codex",
+                "codexStreamlinedLogin": true,
+                "useHostedLoginSuccessPage": true
+            }),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn logout_account(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("account/logout", json!({})).map_err(|error| error.to_string())
+    manager
+        .request("account/logout", json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn read_account_usage(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("account/usage/read", json!({})).map_err(|error| error.to_string())
+    manager
+        .request("account/usage/read", json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn list_collaboration_modes(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("collaborationMode/list", json!({})).map_err(|error| error.to_string())
+    manager
+        .request("collaborationMode/list", json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn read_effective_config(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
-    manager.request("config/read", json!({ "includeLayers": false })).map_err(|error| error.to_string())
+    manager
+        .request("config/read", json!({ "includeLayers": false }))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -439,6 +573,8 @@ pub fn run() {
             respond_server_request,
             load_provider_config,
             save_provider_config,
+            list_provider_profiles,
+            activate_provider_profile,
             delete_provider_secret,
             list_workspace_files,
             read_workspace_file,

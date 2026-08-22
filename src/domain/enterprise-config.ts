@@ -1,8 +1,13 @@
 export type ProviderProtocol = "openai" | "azure-openai" | "openai-compatible";
 export type AuthMethod = "api-key" | "oauth" | "managed-token";
+export type ProviderAdapter = "codex-responses" | "openai-chat" | "anthropic-messages";
 
 export interface ProviderConfig {
+  id: string;
+  providerId: string;
+  displayName: string;
   protocol: ProviderProtocol;
+  adapter: ProviderAdapter;
   baseUrl: string;
   model: string;
   authMethod: AuthMethod;
@@ -40,7 +45,11 @@ export const defaultConfig: EnterpriseConfig = {
     displayName: "本地开发环境",
   },
   provider: {
+    id: "default",
+    providerId: "openai",
+    displayName: "OpenAI",
     protocol: "openai",
+    adapter: "codex-responses",
     baseUrl: "https://api.openai.com/v1",
     model: "",
     authMethod: "api-key",
@@ -104,4 +113,3 @@ export function validateConfig(config: EnterpriseConfig): string[] {
   }
   return errors;
 }
-
