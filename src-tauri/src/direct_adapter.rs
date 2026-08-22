@@ -1,4 +1,7 @@
-use crate::config::{self, ProviderConfig};
+use crate::{
+    config::{self, ProviderConfig},
+    workspace,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -20,6 +23,38 @@ fn cancellations() -> &'static Mutex<HashMap<String, Arc<std::sync::atomic::Atom
 pub struct ConversationMessage {
     pub role: String,
     pub content: String,
+}
+
+pub fn expand_workspace_references(cwd: &str, prompt: &str) -> Result<String, String> {
+    let mut paths = Vec::new();
+    for token in prompt.split_whitespace() {
+        let Some(path) = token.strip_prefix('@') else {
+            continue;
+        };
+        let path = path
+            .trim_matches(|character: char| matches!(character, ',' | ';' | ':' | ')' | ']' | '}'));
+        if path.is_empty()
+            || (!path.contains('/') && !path.contains('\\') && !path.contains('.'))
+            || paths.iter().any(|existing: &String| existing == path)
+        {
+            continue;
+        }
+        paths.push(path.to_string());
+        if paths.len() == 5 {
+            break;
+        }
+    }
+    if paths.is_empty() {
+        return Ok(prompt.to_string());
+    }
+    let mut expanded = prompt.to_string();
+    for path in paths {
+        let content = workspace::read_workspace_file(cwd, &path)
+            .map_err(|error| format!("无法读取 @{}：{}", path, error))?;
+        let preview: String = content.chars().take(24_000).collect();
+        expanded.push_str(&format!("\n\n[工作区文件：{path}]\n{preview}\n[文件结束]"));
+    }
+    Ok(expanded)
 }
 
 pub fn start_turn(

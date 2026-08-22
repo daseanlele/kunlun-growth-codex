@@ -242,11 +242,12 @@ fn start_turn(
 ) -> Result<Value, String> {
     let provider = config::load(&app)?;
     if provider.adapter != "codex-responses" {
+        let expanded_text = direct_adapter::expand_workspace_references(&cwd, &text)?;
         return direct_adapter::start_turn(
             app,
             provider,
             thread_id,
-            text,
+            expanded_text,
             model,
             history.unwrap_or_default(),
         );
