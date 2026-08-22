@@ -309,3 +309,43 @@ fn stream_sse_response(
         Err("模型服务没有返回文本内容或不支持流式输出".to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retains_recent_history_in_chronological_order() {
+        let history = vec![
+            ConversationMessage {
+                role: "user".to_string(),
+                content: "first".to_string(),
+            },
+            ConversationMessage {
+                role: "assistant".to_string(),
+                content: "second".to_string(),
+            },
+        ];
+        let messages = conversation_messages(&history, "third");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["content"], "first");
+        assert_eq!(messages[1]["content"], "second");
+        assert_eq!(messages[2]["content"], "third");
+    }
+
+    #[test]
+    fn expands_only_explicit_workspace_references() {
+        let root =
+            std::env::temp_dir().join(format!("kunlun-direct-adapter-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create test workspace");
+        std::fs::write(root.join("brief.md"), "trusted project brief").expect("write test file");
+        let expanded = expand_workspace_references(
+            root.to_str().expect("workspace path"),
+            "review @brief.md please",
+        )
+        .expect("expand workspace reference");
+        assert!(expanded.contains("trusted project brief"));
+        assert!(expanded.contains("工作区文件：brief.md"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
