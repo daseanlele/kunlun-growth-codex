@@ -113,13 +113,20 @@ function Workspace({ engine, adapter, runtime, configuredModel, cwd, blocks, onC
   const [showFiles, setShowFiles] = useState(false); const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceEntry[]>([]); const [selectedFile, setSelectedFile] = useState<string | null>(null); const [fileContent, setFileContent] = useState(""); const [fileQuery, setFileQuery] = useState("");
   const [showTerminal, setShowTerminal] = useState(false); const [terminalCommand, setTerminalCommand] = useState(""); const [terminalOutput, setTerminalOutput] = useState(""); const [terminalId, setTerminalId] = useState<string | null>(null); const [terminalExitCode, setTerminalExitCode] = useState<number | null>(null);
   useEffect(() => {
-    setThreadId(activeSession === "welcome" ? null : activeSession); setResumedId(null); setTimeline([]); setDiff(""); setGoal("");
+    setThreadId(activeSession === "welcome" ? null : activeSession); setResumedId(null); setTimeline([]); setDiff(""); setGoal(""); setHistoryLoading(false);
     if (activeSession !== "welcome" && runtime.status === "ready") {
+      if (adapter !== "codex-responses") {
+        try { setTimeline(JSON.parse(localStorage.getItem(`kunlun-native-timeline:${activeSession}`) ?? "[]") as TimelineEntry[]); } catch { setTimeline([]); }
+        return;
+      }
       setHistoryLoading(true);
       void readAgentThread(activeSession).then((response) => setTimeline(timelineFromThreadResponse(response as Record<string, unknown>))).finally(() => setHistoryLoading(false));
       if (engine === "codex") void getAgentThreadGoal(activeSession).then((response) => { const root = unwrapResult(response); const value = root.goal && typeof root.goal === "object" ? root.goal as Record<string, unknown> : {}; setGoal(String(value.objective ?? "")); }).catch(() => undefined);
     }
-  }, [activeSession, runtime.status]);
+  }, [activeSession, adapter, runtime.status]);
+  useEffect(() => {
+    if (adapter !== "codex-responses" && threadId) localStorage.setItem(`kunlun-native-timeline:${threadId}`, JSON.stringify(timeline.slice(-200)));
+  }, [adapter, threadId, timeline]);
   useEffect(() => {
     if (engine !== "codex" || runtime.status !== "ready") return;
     if (adapter !== "codex-responses") { setModels([]); setSelectedModel(configuredModel); setEffort(""); setAvailableSkills([]); return; }
