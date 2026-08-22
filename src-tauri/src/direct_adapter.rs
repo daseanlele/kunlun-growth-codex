@@ -25,6 +25,18 @@ pub struct ConversationMessage {
     pub content: String,
 }
 
+#[derive(Debug, Default)]
+struct ToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Default)]
+struct StreamOutcome {
+    tool_calls: Vec<ToolCall>,
+}
+
 pub fn expand_workspace_references(cwd: &str, prompt: &str) -> Result<String, String> {
     let mut paths = Vec::new();
     for token in prompt.split_whitespace() {
@@ -61,6 +73,7 @@ pub fn start_turn(
     app: AppHandle,
     provider: ProviderConfig,
     thread_id: String,
+    cwd: String,
     text: String,
     model_override: Option<String>,
     history: Vec<ConversationMessage>,
@@ -95,15 +108,25 @@ pub fn start_turn(
         let stream_thread_id = thread_id.clone();
         let stream_turn_id = turn_id.clone();
         let stream_cancellation = cancellation.clone();
-        let result = stream_completion(&provider, &model, &text, &history, move |delta| {
-            if stream_cancellation.load(Ordering::Relaxed) {
-                return;
-            }
-            let _ = stream_app.emit("app-server-notification", json!({
+        let mut messages = conversation_messages(&history, &text);
+        let result = run_native_agent(
+            &app,
+            &provider,
+            &model,
+            &cwd,
+            &thread_id,
+            &turn_id,
+            &mut messages,
+            move |delta| {
+                if stream_cancellation.load(Ordering::Relaxed) {
+                    return;
+                }
+                let _ = stream_app.emit("app-server-notification", json!({
                 "method": "item/agentMessage/delta",
                 "params": { "threadId": stream_thread_id, "turnId": stream_turn_id, "itemId": item_id, "delta": delta }
             }));
-        });
+            },
+        );
         let cancelled = cancellation.load(Ordering::Relaxed);
         match result {
             Ok(()) if !cancelled => {
@@ -215,13 +238,84 @@ pub fn discover_models(
     }
 }
 
+fn run_native_agent(
+    app: &AppHandle,
+    provider: &ProviderConfig,
+    model: &str,
+    cwd: &str,
+    thread_id: &str,
+    turn_id: &str,
+    messages: &mut Vec<Value>,
+    mut on_delta: impl FnMut(String),
+) -> Result<(), String> {
+    for _ in 0..8 {
+        let outcome = stream_completion(provider, model, messages, |delta| on_delta(delta))?;
+        if outcome.tool_calls.is_empty() {
+            return Ok(());
+        }
+        let assistant_tool_calls = outcome.tool_calls.iter().map(|call| json!({
+            "id": call.id, "type": "function", "function": { "name": call.name, "arguments": call.arguments }
+        })).collect::<Vec<_>>();
+        messages.push(json!({ "role": "assistant", "tool_calls": assistant_tool_calls }));
+        for call in outcome.tool_calls {
+            let _ = app.emit("app-server-notification", json!({
+                "method": "native/toolCall",
+                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": "只读工作区工具", "status": "running" } }
+            }));
+            let output = execute_read_tool(cwd, &call.name, &call.arguments);
+            let _ = app.emit("app-server-notification", json!({
+                "method": "native/toolCall",
+                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": "只读工作区工具", "status": "completed" } }
+            }));
+            messages.push(json!({ "role": "tool", "tool_call_id": call.id, "content": output }));
+        }
+    }
+    Err("原生模型工具调用超过了 8 轮限制".to_string())
+}
+
+fn execute_read_tool(cwd: &str, name: &str, arguments: &str) -> String {
+    let result = match name {
+        "list_workspace_files" => workspace::list_workspace(cwd).map(|entries| {
+            entries
+                .into_iter()
+                .take(500)
+                .map(|entry| {
+                    format!(
+                        "{}{}",
+                        if entry.is_dir { "目录 " } else { "文件 " },
+                        entry.path
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
+        "read_workspace_file" => {
+            let path = serde_json::from_str::<Value>(arguments)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            path.ok_or_else(|| "read_workspace_file 需要 path 参数".to_string())
+                .and_then(|path| {
+                    workspace::read_workspace_file(cwd, &path)
+                        .map(|text| text.chars().take(48_000).collect())
+                })
+        }
+        "read_git_diff" => workspace::git_diff(cwd).map(|diff| diff.chars().take(96_000).collect()),
+        _ => Err(format!("不允许的只读工具：{name}")),
+    };
+    result.unwrap_or_else(|error| format!("工具执行失败：{error}"))
+}
+
 fn stream_completion(
     provider: &ProviderConfig,
     model: &str,
-    prompt: &str,
-    history: &[ConversationMessage],
+    messages: &[Value],
     on_delta: impl FnMut(String),
-) -> Result<(), String> {
+) -> Result<StreamOutcome, String> {
     let secret = config::read_api_key(provider)?
         .ok_or_else(|| format!("{} 尚未配置 API Key", provider.display_name))?;
     let client = reqwest::blocking::Client::builder()
@@ -234,7 +328,7 @@ fn stream_completion(
             .post(url)
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": conversation_messages(history, prompt) }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages }))
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
         return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
@@ -246,10 +340,18 @@ fn stream_completion(
     let response = client
         .post(url)
         .bearer_auth(secret)
-        .json(&json!({ "model": model, "messages": conversation_messages(history, prompt), "stream": true }))
+        .json(&json!({ "model": model, "messages": messages, "stream": true, "tools": read_only_tools(), "tool_choice": "auto" }))
         .send()
         .map_err(|error| format!("模型请求失败：{error}"))?;
     stream_sse_response(response, SseProtocol::OpenAiChat, on_delta)
+}
+
+fn read_only_tools() -> Vec<Value> {
+    vec![
+        json!({ "type": "function", "function": { "name": "list_workspace_files", "description": "列出用户已选择工作区的文件和目录。用于了解项目结构。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
+        json!({ "type": "function", "function": { "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } } }),
+        json!({ "type": "function", "function": { "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
+    ]
 }
 
 fn conversation_messages(history: &[ConversationMessage], prompt: &str) -> Vec<Value> {
@@ -268,7 +370,7 @@ fn stream_sse_response(
     response: reqwest::blocking::Response,
     protocol: SseProtocol,
     mut on_delta: impl FnMut(String),
-) -> Result<(), String> {
+) -> Result<StreamOutcome, String> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().map_err(|error| error.to_string())?;
@@ -280,6 +382,7 @@ fn stream_sse_response(
         return Err(format!("模型服务返回 HTTP {status}：{message}"));
     }
     let mut emitted = false;
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
     for line in BufReader::new(response).lines() {
         let line = line.map_err(|error| format!("模型流读取失败：{error}"))?;
         let Some(data) = line.strip_prefix("data: ") else {
@@ -302,11 +405,39 @@ fn stream_sse_response(
             emitted = true;
             on_delta(delta.to_string());
         }
+        if matches!(protocol, SseProtocol::OpenAiChat) {
+            collect_openai_tool_calls(&value, &mut tool_calls);
+        }
     }
-    if emitted {
-        Ok(())
+    tool_calls.retain(|call| !call.id.is_empty() && !call.name.is_empty());
+    if emitted || !tool_calls.is_empty() {
+        Ok(StreamOutcome { tool_calls })
     } else {
         Err("模型服务没有返回文本内容或不支持流式输出".to_string())
+    }
+}
+
+fn collect_openai_tool_calls(value: &Value, tool_calls: &mut Vec<ToolCall>) {
+    for call in value
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        while tool_calls.len() <= index {
+            tool_calls.push(ToolCall::default());
+        }
+        let current = &mut tool_calls[index];
+        if let Some(id) = call.get("id").and_then(Value::as_str) {
+            current.id = id.to_string();
+        }
+        if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+            current.name.push_str(name);
+        }
+        if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            current.arguments.push_str(arguments);
+        }
     }
 }
 
@@ -347,5 +478,21 @@ mod tests {
         assert!(expanded.contains("trusted project brief"));
         assert!(expanded.contains("工作区文件：brief.md"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn combines_fragmented_openai_tool_calls() {
+        let mut calls = Vec::new();
+        collect_openai_tool_calls(
+            &json!({ "choices": [{ "delta": { "tool_calls": [{ "index": 0, "id": "call_1", "function": { "name": "read_workspace_", "arguments": "{\"pa" } }] } }] }),
+            &mut calls,
+        );
+        collect_openai_tool_calls(
+            &json!({ "choices": [{ "delta": { "tool_calls": [{ "index": 0, "function": { "name": "file", "arguments": "th\":\"src/main.rs\"}" } }] } }] }),
+            &mut calls,
+        );
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "read_workspace_file");
+        assert_eq!(calls[0].arguments, "{\"path\":\"src/main.rs\"}");
     }
 }

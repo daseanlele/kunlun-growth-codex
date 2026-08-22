@@ -247,6 +247,7 @@ fn start_turn(
             app,
             provider,
             thread_id,
+            cwd,
             expanded_text,
             model,
             history.unwrap_or_default(),
