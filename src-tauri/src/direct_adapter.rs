@@ -253,10 +253,14 @@ fn run_native_agent(
         if outcome.tool_calls.is_empty() {
             return Ok(());
         }
-        let assistant_tool_calls = outcome.tool_calls.iter().map(|call| json!({
-            "id": call.id, "type": "function", "function": { "name": call.name, "arguments": call.arguments }
-        })).collect::<Vec<_>>();
-        messages.push(json!({ "role": "assistant", "tool_calls": assistant_tool_calls }));
+        if provider.adapter == "anthropic-messages" {
+            let content = outcome.tool_calls.iter().map(|call| json!({ "type": "tool_use", "id": call.id, "name": call.name, "input": serde_json::from_str::<Value>(&call.arguments).unwrap_or(json!({})) })).collect::<Vec<_>>();
+            messages.push(json!({ "role": "assistant", "content": content }));
+        } else {
+            let assistant_tool_calls = outcome.tool_calls.iter().map(|call| json!({ "id": call.id, "type": "function", "function": { "name": call.name, "arguments": call.arguments } })).collect::<Vec<_>>();
+            messages.push(json!({ "role": "assistant", "tool_calls": assistant_tool_calls }));
+        }
+        let mut tool_results = Vec::new();
         for call in outcome.tool_calls {
             let _ = app.emit("app-server-notification", json!({
                 "method": "native/toolCall",
@@ -267,7 +271,17 @@ fn run_native_agent(
                 "method": "native/toolCall",
                 "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": "只读工作区工具", "status": "completed" } }
             }));
-            messages.push(json!({ "role": "tool", "tool_call_id": call.id, "content": output }));
+            if provider.adapter == "anthropic-messages" {
+                tool_results.push(
+                    json!({ "type": "tool_result", "tool_use_id": call.id, "content": output }),
+                );
+            } else {
+                messages
+                    .push(json!({ "role": "tool", "tool_call_id": call.id, "content": output }));
+            }
+        }
+        if provider.adapter == "anthropic-messages" {
+            messages.push(json!({ "role": "user", "content": tool_results }));
         }
     }
     Err("原生模型工具调用超过了 8 轮限制".to_string())
@@ -328,7 +342,7 @@ fn stream_completion(
             .post(url)
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages, "tools": anthropic_read_only_tools() }))
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
         return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
@@ -351,6 +365,14 @@ fn read_only_tools() -> Vec<Value> {
         json!({ "type": "function", "function": { "name": "list_workspace_files", "description": "列出用户已选择工作区的文件和目录。用于了解项目结构。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
+    ]
+}
+
+fn anthropic_read_only_tools() -> Vec<Value> {
+    vec![
+        json!({ "name": "list_workspace_files", "description": "列出用户已选择工作区的文件和目录。用于了解项目结构。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
+        json!({ "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } }),
+        json!({ "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
     ]
 }
 
@@ -405,8 +427,9 @@ fn stream_sse_response(
             emitted = true;
             on_delta(delta.to_string());
         }
-        if matches!(protocol, SseProtocol::OpenAiChat) {
-            collect_openai_tool_calls(&value, &mut tool_calls);
+        match protocol {
+            SseProtocol::OpenAiChat => collect_openai_tool_calls(&value, &mut tool_calls),
+            SseProtocol::Anthropic => collect_anthropic_tool_calls(&value, &mut tool_calls),
         }
     }
     tool_calls.retain(|call| !call.id.is_empty() && !call.name.is_empty());
@@ -438,6 +461,42 @@ fn collect_openai_tool_calls(value: &Value, tool_calls: &mut Vec<ToolCall>) {
         if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
             current.arguments.push_str(arguments);
         }
+    }
+}
+
+fn collect_anthropic_tool_calls(value: &Value, tool_calls: &mut Vec<ToolCall>) {
+    let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let is_start = value.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use");
+    let partial = value.pointer("/delta/partial_json").and_then(Value::as_str);
+    if !is_start && partial.is_none() {
+        return;
+    }
+    while tool_calls.len() <= index {
+        tool_calls.push(ToolCall::default());
+    }
+    let current = &mut tool_calls[index];
+    if is_start {
+        if let Some(id) = value.pointer("/content_block/id").and_then(Value::as_str) {
+            current.id = id.to_string();
+        }
+        if let Some(name) = value.pointer("/content_block/name").and_then(Value::as_str) {
+            current.name = name.to_string();
+        }
+        if let Some(input) = value
+            .pointer("/content_block/input")
+            .filter(|input| !input.is_null())
+        {
+            if input
+                .as_object()
+                .map(|object| !object.is_empty())
+                .unwrap_or(true)
+            {
+                current.arguments = input.to_string();
+            }
+        }
+    }
+    if let Some(partial) = partial {
+        current.arguments.push_str(partial);
     }
 }
 
@@ -494,5 +553,21 @@ mod tests {
         assert_eq!(calls[0].id, "call_1");
         assert_eq!(calls[0].name, "read_workspace_file");
         assert_eq!(calls[0].arguments, "{\"path\":\"src/main.rs\"}");
+    }
+
+    #[test]
+    fn combines_anthropic_tool_use_input() {
+        let mut calls = Vec::new();
+        collect_anthropic_tool_calls(
+            &json!({ "index": 0, "content_block": { "type": "tool_use", "id": "toolu_1", "name": "read_workspace_file", "input": {} } }),
+            &mut calls,
+        );
+        collect_anthropic_tool_calls(
+            &json!({ "index": 0, "delta": { "type": "input_json_delta", "partial_json": "{\"path\":\"README.md\"}" } }),
+            &mut calls,
+        );
+        assert_eq!(calls[0].id, "toolu_1");
+        assert_eq!(calls[0].name, "read_workspace_file");
+        assert_eq!(calls[0].arguments, "{\"path\":\"README.md\"}");
     }
 }
