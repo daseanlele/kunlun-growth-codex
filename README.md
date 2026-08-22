@@ -53,7 +53,7 @@ npm run mac:build
 
 ## 多模型适配边界
 
-Codex / OpenAI Responses 适配器使用 App Server，因此具备完整的代理工具、审批、Skills、MCP、Review 与协作能力。Claude 与 Chat Completions 适配器使用各自原生 API，不会伪装为 Responses 协议；当前已支持流式多轮对话、模型发现、停止、受限 `@文件` 上下文，以及列目录、读文件、读 Git Diff 的只读工具循环。原生 API 的写文件、执行命令、MCP 与子代理工具循环仍在接入中，未接入前不会绕过企业审批边界。
+Codex / OpenAI Responses 适配器使用 App Server，因此具备完整的代理工具、审批、Skills、MCP、Review 与协作能力。Claude 与 Chat Completions 适配器使用各自原生 API，不会伪装为 Responses 协议；当前已支持流式多轮对话、模型发现、停止、受限 `@文件` 上下文，以及列目录、读文件、读 Git Diff 的工具循环。原生模型可请求覆盖已有 UTF-8 文本文件，但每一次写入都会在桌面端要求用户明确批准，且不会创建、删除或重命名文件。执行命令、网络访问、MCP 与子代理工具循环仍在接入中，未接入前不会绕过企业审批边界。
 
 架构与交付边界见 [`docs/architecture.md`](docs/architecture.md)，版本路线见 [`docs/roadmap.md`](docs/roadmap.md)。
 

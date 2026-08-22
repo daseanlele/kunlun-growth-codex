@@ -336,6 +336,9 @@ fn respond_server_request(
     id: Value,
     result: Value,
 ) -> Result<(), String> {
+    if direct_adapter::respond_to_approval(&id, result.clone()) {
+        return Ok(());
+    }
     manager
         .respond(id, result)
         .map_err(|error| error.to_string())

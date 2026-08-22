@@ -133,6 +133,37 @@ pub fn read_workspace_file(cwd: &str, relative_path: &str) -> Result<String, Str
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// Replaces the contents of an existing, non-binary file inside the selected workspace.
+/// Callers are responsible for obtaining an explicit user approval before invoking this.
+pub fn write_workspace_file(cwd: &str, relative_path: &str, content: &str) -> Result<(), String> {
+    if content.len() > MAX_FILE_BYTES as usize {
+        return Err("File content exceeds the 1 MB write limit".to_string());
+    }
+    let root = canonical_root(cwd)?;
+    let path = resolve_inside(&root, relative_path)?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("Unable to read file metadata: {error}"))?;
+    if !metadata.is_file() {
+        return Err("Selected path is not a file".to_string());
+    }
+    let existing = fs::read(&path).map_err(|error| format!("Unable to read file: {error}"))?;
+    if existing.iter().take(8_192).any(|byte| *byte == 0) {
+        return Err("Binary files cannot be overwritten".to_string());
+    }
+    let temporary = path.with_extension(format!(
+        "{}.kunlun-tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("write")
+    ));
+    fs::write(&temporary, content)
+        .map_err(|error| format!("Unable to stage file write: {error}"))?;
+    fs::rename(&temporary, &path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("Unable to replace file: {error}")
+    })
+}
+
 pub fn git_diff(cwd: &str) -> Result<String, String> {
     let root = canonical_root(cwd)?;
     let output = hidden_command("git")
@@ -326,6 +357,22 @@ mod tests {
         let rows = list_workspace(root.to_str().unwrap()).unwrap();
         assert!(rows.iter().any(|row| row.path == "src/main.rs"));
         assert!(!rows.iter().any(|row| row.path.contains("node_modules")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn writes_existing_text_file_but_not_new_or_escaping_paths() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("kunlun-write-{suffix}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("note.txt"), "before").unwrap();
+        write_workspace_file(root.to_str().unwrap(), "note.txt", "after").unwrap();
+        assert_eq!(fs::read_to_string(root.join("note.txt")).unwrap(), "after");
+        assert!(write_workspace_file(root.to_str().unwrap(), "new.txt", "no").is_err());
+        assert!(write_workspace_file(root.to_str().unwrap(), "../outside.txt", "no").is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

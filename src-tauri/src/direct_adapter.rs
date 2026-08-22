@@ -7,15 +7,34 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
 static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
 static CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>> =
     OnceLock::new();
+static APPROVALS: OnceLock<Mutex<HashMap<String, mpsc::Sender<Value>>>> = OnceLock::new();
 
 fn cancellations() -> &'static Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>> {
     CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn approvals() -> &'static Mutex<HashMap<String, mpsc::Sender<Value>>> {
+    APPROVALS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn respond_to_approval(id: &Value, result: Value) -> bool {
+    let Some(id) = id.as_str() else {
+        return false;
+    };
+    let sender = approvals()
+        .lock()
+        .ok()
+        .and_then(|mut items| items.remove(id));
+    sender
+        .map(|sender| sender.send(result).is_ok())
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -262,14 +281,19 @@ fn run_native_agent(
         }
         let mut tool_results = Vec::new();
         for call in outcome.tool_calls {
+            let description = if call.name == "write_workspace_file" {
+                "等待用户批准后写入工作区文件"
+            } else {
+                "只读工作区工具"
+            };
             let _ = app.emit("app-server-notification", json!({
                 "method": "native/toolCall",
-                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": "只读工作区工具", "status": "running" } }
+                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": description, "status": "running" } }
             }));
-            let output = execute_read_tool(cwd, &call.name, &call.arguments);
+            let output = execute_tool(app, cwd, thread_id, turn_id, &call);
             let _ = app.emit("app-server-notification", json!({
                 "method": "native/toolCall",
-                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": "只读工作区工具", "status": "completed" } }
+                "params": { "threadId": thread_id, "turnId": turn_id, "item": { "id": format!("{turn_id}-{}", call.id), "name": call.name, "description": description, "status": "completed" } }
             }));
             if provider.adapter == "anthropic-messages" {
                 tool_results.push(
@@ -287,8 +311,19 @@ fn run_native_agent(
     Err("原生模型工具调用超过了 8 轮限制".to_string())
 }
 
-fn execute_read_tool(cwd: &str, name: &str, arguments: &str) -> String {
-    let result = match name {
+fn execute_tool(
+    app: &AppHandle,
+    cwd: &str,
+    thread_id: &str,
+    turn_id: &str,
+    call: &ToolCall,
+) -> String {
+    if call.name == "write_workspace_file" {
+        return execute_write_tool(app, cwd, thread_id, turn_id, &call.id, &call.arguments);
+    }
+    let name = &call.name;
+    let arguments = &call.arguments;
+    let result = match name.as_str() {
         "list_workspace_files" => workspace::list_workspace(cwd).map(|entries| {
             entries
                 .into_iter()
@@ -324,6 +359,52 @@ fn execute_read_tool(cwd: &str, name: &str, arguments: &str) -> String {
     result.unwrap_or_else(|error| format!("工具执行失败：{error}"))
 }
 
+fn execute_write_tool(
+    app: &AppHandle,
+    cwd: &str,
+    _thread_id: &str,
+    turn_id: &str,
+    call_id: &str,
+    arguments: &str,
+) -> String {
+    let parsed = serde_json::from_str::<Value>(arguments).unwrap_or(Value::Null);
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return "write_workspace_file 需要 path 参数".to_string();
+    };
+    let Some(content) = parsed.get("content").and_then(Value::as_str) else {
+        return "write_workspace_file 需要 content 参数".to_string();
+    };
+    let approval_id = format!("native-approval-{turn_id}-{call_id}");
+    let (sender, receiver) = mpsc::channel();
+    if approvals()
+        .lock()
+        .map(|mut items| items.insert(approval_id.clone(), sender))
+        .is_err()
+    {
+        return "无法创建写入审批".to_string();
+    }
+    let _ = app.emit("app-server-request", json!({
+        "id": approval_id,
+        "method": "permissions/requestApproval",
+        "params": { "reason": format!("原生模型请求覆盖工作区文件 {path}"), "requestedPermissions": { "writeWorkspaceFile": path }, "cwd": cwd }
+    }));
+    let approved = receiver
+        .recv_timeout(std::time::Duration::from_secs(300))
+        .ok()
+        .and_then(|result| result.get("permissions").cloned())
+        .map(|permissions| permissions != json!({}))
+        .unwrap_or(false);
+    if let Ok(mut items) = approvals().lock() {
+        items.remove(&approval_id);
+    }
+    if !approved {
+        return "用户未批准写入文件".to_string();
+    }
+    workspace::write_workspace_file(cwd, path, content)
+        .map(|_| format!("已写入 {path}"))
+        .unwrap_or_else(|error| format!("工具执行失败：{error}"))
+}
+
 fn stream_completion(
     provider: &ProviderConfig,
     model: &str,
@@ -342,7 +423,7 @@ fn stream_completion(
             .post(url)
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages, "tools": anthropic_read_only_tools() }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages, "tools": native_tools_anthropic() }))
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
         return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
@@ -354,26 +435,30 @@ fn stream_completion(
     let response = client
         .post(url)
         .bearer_auth(secret)
-        .json(&json!({ "model": model, "messages": messages, "stream": true, "tools": read_only_tools(), "tool_choice": "auto" }))
+        .json(&json!({ "model": model, "messages": messages, "stream": true, "tools": native_tools_openai(), "tool_choice": "auto" }))
         .send()
         .map_err(|error| format!("模型请求失败：{error}"))?;
     stream_sse_response(response, SseProtocol::OpenAiChat, on_delta)
 }
 
-fn read_only_tools() -> Vec<Value> {
-    vec![
+fn native_tools_openai() -> Vec<Value> {
+    let mut tools = vec![
         json!({ "type": "function", "function": { "name": "list_workspace_files", "description": "列出用户已选择工作区的文件和目录。用于了解项目结构。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
-    ]
+    ];
+    tools.push(json!({ "type": "function", "function": { "name": "write_workspace_file", "description": "覆盖一个已存在的工作区 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得用于创建、删除或重命名文件。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的现有文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } } }));
+    tools
 }
 
-fn anthropic_read_only_tools() -> Vec<Value> {
-    vec![
+fn native_tools_anthropic() -> Vec<Value> {
+    let mut tools = vec![
         json!({ "name": "list_workspace_files", "description": "列出用户已选择工作区的文件和目录。用于了解项目结构。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
         json!({ "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } }),
         json!({ "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
-    ]
+    ];
+    tools.push(json!({ "name": "write_workspace_file", "description": "覆盖一个已存在的工作区 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得用于创建、删除或重命名文件。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的现有文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } }));
+    tools
 }
 
 fn conversation_messages(history: &[ConversationMessage], prompt: &str) -> Vec<Value> {
