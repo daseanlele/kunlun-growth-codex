@@ -1,6 +1,6 @@
 [package]
 name = "kunlun-growth-codex"
-version = "0.5.3"
+version = "0.5.4"
 description = "昆仑增长企业 AI 桌面工作台"
 authors = ["Kunlun Growth Contributors"]
 license = "Apache-2.0"

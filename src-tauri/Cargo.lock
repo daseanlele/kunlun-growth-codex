@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "kunlun-growth-codex"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",
