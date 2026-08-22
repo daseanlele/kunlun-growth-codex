@@ -288,10 +288,10 @@ fn run_native_agent(
         }
         let mut tool_results = Vec::new();
         for call in outcome.tool_calls {
-            let description = if call.name == "write_workspace_file" {
-                "等待用户批准后创建或写入工作区文件"
-            } else {
-                "只读工作区工具"
+            let description = match call.name.as_str() {
+                "write_workspace_file" => "等待用户批准后创建或写入工作区文件",
+                "run_workspace_check" => "等待用户批准的受限工作区检查",
+                _ => "只读工作区工具",
             };
             let _ = app.emit("app-server-notification", json!({
                 "method": "native/toolCall",
