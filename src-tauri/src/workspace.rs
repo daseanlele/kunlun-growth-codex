@@ -239,6 +239,11 @@ pub fn run_workspace_check(cwd: &str, task: &str) -> Result<String, String> {
         "cargo_test" => ("cargo", &["test"]),
         _ => return Err("Unsupported workspace check".to_string()),
     };
+    let program = if cfg!(windows) && program == "npm" {
+        "npm.cmd"
+    } else {
+        program
+    };
     let output = hidden_command(program)
         .args(args)
         .current_dir(root)
