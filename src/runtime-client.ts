@@ -78,14 +78,14 @@ export async function createAgentThread(cwd: string, model?: string, engine: Run
   return invoke<AppServerMessage>("create_thread", { cwd, model: model || null, engine });
 }
 
-export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string, effort?: string): Promise<AppServerMessage> {
+export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string, effort?: string, imagePaths: string[] = [], skill?: Pick<RuntimeSkill, "name" | "path">): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { turn: { id: "web-preview-turn" } } };
-  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null, effort: effort || null });
+  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null, effort: effort || null, imagePaths, skillName: skill?.name || null, skillPath: skill?.path || null });
 }
 
-export async function listAgentThreads(engine: RuntimeEngine = "codex"): Promise<RuntimeSession[]> {
+export async function listAgentThreads(engine: RuntimeEngine = "codex", filters: { searchTerm?: string; archived?: boolean; isPinned?: boolean } = {}): Promise<RuntimeSession[]> {
   if (!isTauri()) return [];
-  const response = await invoke<AppServerMessage>("list_threads", { engine });
+  const response = await invoke<AppServerMessage>("list_threads", { engine, searchTerm: filters.searchTerm || null, archived: filters.archived ?? null, isPinned: filters.isPinned ?? null });
   const source = (response.result ?? response) as Record<string, unknown>;
   const rows = (source.data ?? source.threads) as Array<Record<string, unknown>> | undefined;
   return (rows ?? []).map((thread) => ({
@@ -95,6 +95,8 @@ export async function listAgentThreads(engine: RuntimeEngine = "codex"): Promise
     cwd: String(thread.cwd ?? ""),
     updatedAt: String(thread.updatedAt ?? thread.updated_at ?? new Date().toISOString()),
     status: "idle" as const,
+    isPinned: thread.isPinned === true,
+    archived: filters.archived === true,
   })).filter((thread) => thread.id.length > 0);
 }
 
@@ -131,6 +133,26 @@ export async function archiveAgentThread(threadId: string): Promise<void> {
 export async function forkAgentThread(threadId: string, lastTurnId?: string): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { thread: { id: `web-fork-${Date.now()}`, forkedFromId: threadId } } };
   return invoke<AppServerMessage>("fork_thread", { threadId, lastTurnId: lastTurnId || null });
+}
+
+export async function setAgentThreadPinned(threadId: string, isPinned: boolean): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_thread_pinned", { threadId, isPinned });
+}
+
+export async function setAgentThreadGoal(threadId: string, objective: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { goal: { threadId, objective, status: "active" } } };
+  return invoke<AppServerMessage>("set_thread_goal", { threadId, objective });
+}
+
+export async function getAgentThreadGoal(threadId: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { goal: null } };
+  return invoke<AppServerMessage>("get_thread_goal", { threadId });
+}
+
+export async function startAgentReview(threadId: string, delivery: "inline" | "detached" = "inline"): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { turn: { id: `web-review-${Date.now()}`, status: "inProgress" }, reviewThreadId: threadId } };
+  return invoke<AppServerMessage>("start_review", { threadId, delivery });
 }
 
 export async function interruptAgentTurn(threadId: string, turnId: string): Promise<void> {
@@ -184,6 +206,27 @@ export async function runTerminalCommand(cwd: string, command: string): Promise<
 export async function stopTerminalCommand(id: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("stop_terminal_command", { id });
+}
+
+export async function runSandboxTerminal(cwd: string, command: string, processId: string, cols = 120, rows = 30): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { exitCode: 0, stdout: "", stderr: "" } };
+  return invoke<AppServerMessage>("run_sandbox_terminal", { cwd, command, processId, cols, rows });
+}
+
+export async function writeSandboxTerminal(processId: string, text: string): Promise<void> {
+  if (!isTauri()) return;
+  const bytes = new TextEncoder().encode(text); let binary = ""; bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  await invoke("write_sandbox_terminal", { processId, deltaBase64: btoa(binary) });
+}
+
+export async function resizeSandboxTerminal(processId: string, cols: number, rows: number): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("resize_sandbox_terminal", { processId, cols, rows });
+}
+
+export async function stopSandboxTerminal(processId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("stop_sandbox_terminal", { processId });
 }
 
 export async function onTerminalOutput(handler: (event: TerminalOutputEvent) => void): Promise<UnlistenFn> {
@@ -245,6 +288,16 @@ export async function loadMcpServers(threadId?: string): Promise<RuntimeMcpServe
 export async function readRuntimeAccount(): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { account: { type: "local", email: "本地预览" }, requiresOpenaiAuth: false } };
   return invoke<AppServerMessage>("read_account");
+}
+
+export async function startCodexAccountLogin(): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { type: "chatgpt", loginId: "web-login", authUrl: "https://chatgpt.com/auth/login" } };
+  return invoke<AppServerMessage>("start_account_login");
+}
+
+export async function logoutRuntimeAccount(): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("logout_account");
 }
 
 export async function readRuntimeUsage(): Promise<AppServerMessage> {

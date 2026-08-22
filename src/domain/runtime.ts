@@ -8,6 +8,8 @@ export interface RuntimeSession {
   cwd: string;
   updatedAt: string;
   status: "idle" | "running" | "completed" | "failed";
+  isPinned?: boolean;
+  archived?: boolean;
 }
 
 export interface TimelineEntry {
@@ -37,6 +39,7 @@ export interface AgentModel {
   isDefault: boolean;
   defaultReasoningEffort: string;
   supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+  inputModalities?: string[];
 }
 
 export const runtimeCatalog: Record<RuntimeEngine, { label: string; shortLabel: string; capabilities: RuntimeCapabilities }> = {
@@ -79,6 +82,12 @@ export function normalizeRuntimeEvent(message: ProtocolEnvelope): TimelineEntry 
   }
   if (method.toLowerCase().includes("plan") || method.includes("todo")) {
     return { id, kind: "plan", title: "任务计划", text: formatPlan(params.plan) ?? extractText(params), status: "running" };
+  }
+  if (item.type === "enteredReviewMode") {
+    return { id, kind: "status", title: "代码审查已开始", text: stringValue(item.review), status: "running" };
+  }
+  if (item.type === "exitedReviewMode") {
+    return { id, kind: "message", title: "代码审查结果", text: stringValue(item.review), status: "completed" };
   }
   if (method.includes("tool") || method.includes("hook")) {
     return { id, kind: "tool", title: stringValue(item.name) ?? method, detail: stringValue(item.description), status: statusOf(item.status) };
