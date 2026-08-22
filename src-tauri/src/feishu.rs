@@ -1,6 +1,7 @@
-use crate::config;
+use crate::{config, organization};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
 
 const FEISHU_TOKEN_ENDPOINT: &str =
     "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
@@ -33,8 +34,13 @@ pub fn save_app_secret(config: &FeishuConnectorConfig, secret: &str) -> Result<(
     config::save_connector_secret(&secret_reference(&config.id), secret)
 }
 
-pub fn verify_connection(connector: &FeishuConnectorConfig) -> Result<FeishuConnection, String> {
+pub fn verify_connection(
+    app: &AppHandle,
+    connector: &FeishuConnectorConfig,
+) -> Result<FeishuConnection, String> {
     validate_config(connector)?;
+    organization::require_connector(app, "kunlun.feishu.open")?;
+    organization::require_domain(app, "open.feishu.cn")?;
     let secret = config::read_connector_secret(&secret_reference(&connector.id))?
         .ok_or_else(|| "飞书应用凭据尚未写入系统凭据库".to_string())?;
     let response = Client::builder()

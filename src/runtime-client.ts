@@ -44,6 +44,7 @@ export interface KnowledgeScan { source: string; root: string; documents: Knowle
 export interface KnowledgeHit { document: KnowledgeDocument; excerpt: string; line: number }
 export interface FeishuConnectorConfig { id: string; appId: string }
 export interface FeishuConnection { connectorId: string; expiresInSeconds: number; authMode: string }
+export interface OrganizationPreset { schemaVersion: number; id: string; displayName: string; approvedConnectors: string[]; allowedDomains: string[]; lockedFeatures: string[] }
 export interface DirectMessage { role: "user" | "assistant"; content: string }
 
 const webFallback: RuntimeSnapshot = {
@@ -97,6 +98,16 @@ export async function saveFeishuAppSecret(connector: FeishuConnectorConfig, appS
 export async function verifyFeishuConnection(connector: FeishuConnectorConfig): Promise<FeishuConnection> {
   if (!isTauri()) return { connectorId: connector.id, expiresInSeconds: 0, authMode: "tenant_access_token" };
   return invoke<FeishuConnection>("verify_feishu_connection", { connector });
+}
+
+export async function loadOrganizationPreset(): Promise<OrganizationPreset> {
+  if (!isTauri()) return { schemaVersion: 1, id: "local", displayName: "本地开发组织", approvedConnectors: [], allowedDomains: [], lockedFeatures: [] };
+  return invoke<OrganizationPreset>("load_organization_preset");
+}
+
+export async function saveOrganizationPreset(preset: OrganizationPreset): Promise<OrganizationPreset> {
+  if (!isTauri()) return preset;
+  return invoke<OrganizationPreset>("save_organization_preset", { preset });
 }
 
 export async function getPreferredRuntimeEngine(): Promise<RuntimeEngine> {

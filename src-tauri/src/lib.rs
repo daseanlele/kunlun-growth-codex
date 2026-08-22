@@ -3,6 +3,7 @@ mod direct_adapter;
 mod feishu;
 mod governance;
 mod knowledge;
+mod organization;
 mod runtime;
 mod workspace;
 
@@ -414,16 +415,32 @@ fn read_workspace_file(cwd: String, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn scan_obsidian_vault(vault: String) -> Result<knowledge::KnowledgeScan, String> {
+fn scan_obsidian_vault(app: AppHandle, vault: String) -> Result<knowledge::KnowledgeScan, String> {
+    organization::require_connector(&app, "kunlun.obsidian.local")?;
     knowledge::scan_obsidian_vault(&vault)
 }
 
 #[tauri::command]
 fn search_obsidian_vault(
+    app: AppHandle,
     vault: String,
     query: String,
 ) -> Result<Vec<knowledge::KnowledgeHit>, String> {
+    organization::require_connector(&app, "kunlun.obsidian.local")?;
     knowledge::search_obsidian_vault(&vault, &query)
+}
+
+#[tauri::command]
+fn load_organization_preset(app: AppHandle) -> Result<organization::OrganizationPreset, String> {
+    organization::load(&app)
+}
+
+#[tauri::command]
+fn save_organization_preset(
+    app: AppHandle,
+    preset: organization::OrganizationPreset,
+) -> Result<organization::OrganizationPreset, String> {
+    organization::save(&app, preset)
 }
 
 #[tauri::command]
@@ -436,9 +453,10 @@ fn save_feishu_app_secret(
 
 #[tauri::command]
 fn verify_feishu_connection(
+    app: AppHandle,
     connector: feishu::FeishuConnectorConfig,
 ) -> Result<feishu::FeishuConnection, String> {
-    feishu::verify_connection(&connector)
+    feishu::verify_connection(&app, &connector)
 }
 
 #[tauri::command]
@@ -654,6 +672,8 @@ pub fn run() {
             read_workspace_file,
             scan_obsidian_vault,
             search_obsidian_vault,
+            load_organization_preset,
+            save_organization_preset,
             save_feishu_app_secret,
             verify_feishu_connection,
             read_git_diff,
