@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter};
 const MAX_FILES: usize = 5_000;
 const MAX_FILE_BYTES: u64 = 1_048_576;
 const MAX_DIFF_BYTES: usize = 2_097_152;
+const MAX_SEARCH_BYTES: usize = 262_144;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +182,51 @@ pub fn git_diff(cwd: &str) -> Result<String, String> {
         bytes.truncate(MAX_DIFF_BYTES);
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub fn search_workspace(
+    cwd: &str,
+    query: &str,
+    relative_path: Option<&str>,
+) -> Result<String, String> {
+    let root = canonical_root(cwd)?;
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > 256 {
+        return Err("Search query must contain between 1 and 256 characters".to_string());
+    }
+    let prefix = relative_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let resolved = resolve_inside(&root, path)?;
+            let relative = resolved
+                .strip_prefix(&root)
+                .map_err(|_| "Path escapes the selected workspace".to_string())?;
+            Ok::<_, String>(relative.to_string_lossy().replace('\\', "/"))
+        })
+        .transpose()?;
+    let mut output = String::new();
+    for entry in list_workspace(cwd)? {
+        if entry.is_dir
+            || prefix
+                .as_ref()
+                .is_some_and(|prefix| !entry.path.starts_with(prefix))
+        {
+            continue;
+        }
+        let Ok(content) = read_workspace_file(cwd, &entry.path) else {
+            continue;
+        };
+        for (index, line) in content.lines().enumerate() {
+            if line.contains(query) {
+                output.push_str(&format!("{}:{}:{}\n", entry.path, index + 1, line));
+                if output.len() >= MAX_SEARCH_BYTES {
+                    return Ok(output);
+                }
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn canonical_root(cwd: &str) -> Result<PathBuf, String> {
@@ -419,6 +465,21 @@ mod tests {
             "new content"
         );
         assert!(write_workspace_file(root.to_str().unwrap(), "../outside.txt", "no").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn searches_text_within_workspace() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("kunlun-search-{suffix}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("note.txt"), "alpha\nbeta marker\n").unwrap();
+        let output = search_workspace(root.to_str().unwrap(), "marker", None).unwrap();
+        assert!(output.contains("note.txt") && output.contains("beta marker"));
+        assert!(search_workspace(root.to_str().unwrap(), "", None).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }
