@@ -20,6 +20,8 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
     pub auth_method: String,
+    #[serde(default)]
+    pub auth_header: Option<String>,
     pub credential_ref: Option<String>,
 }
 
@@ -34,6 +36,7 @@ impl Default for ProviderConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             model: String::new(),
             auth_method: "api-key".to_string(),
+            auth_header: None,
             credential_ref: None,
         }
     }
@@ -111,6 +114,18 @@ pub fn save(
         "codex-responses" | "openai-chat" | "anthropic-messages"
     ) {
         return Err("Unsupported provider adapter".to_string());
+    }
+    if let Some(header) = config.auth_header.as_ref() {
+        if header.trim().is_empty()
+            || header.len() > 128
+            || !header
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(
+                "Authentication header must contain only letters, numbers, and hyphens".to_string(),
+            );
+        }
     }
     if config.id.trim().is_empty() {
         config.id = "default".to_string();

@@ -419,8 +419,12 @@ fn apply_provider_config(
         command
             .arg("-c")
             .arg("model_providers.enterprise.wire_api=\"responses\"");
-        if provider.protocol == "azure-openai" {
-            command.arg("-c").arg("model_providers.enterprise.env_http_headers={\"api-key\"=\"KUNLUN_GROWTH_API_KEY\"}");
+        if provider.protocol == "azure-openai" || provider.auth_header.is_some() {
+            let header = provider.auth_header.as_deref().unwrap_or("api-key");
+            command.arg("-c").arg(format!(
+                "model_providers.enterprise.env_http_headers={{{}=\"KUNLUN_GROWTH_API_KEY\"}}",
+                toml_string(header)
+            ));
         } else {
             command
                 .arg("-c")

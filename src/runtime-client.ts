@@ -23,6 +23,7 @@ export interface ProviderConfigPayload {
   baseUrl: string;
   model: string;
   authMethod: string;
+  authHeader: string | null;
   credentialRef: string | null;
 }
 
@@ -354,5 +355,6 @@ const defaultProvider: ProviderConfigPayload = {
   baseUrl: "https://api.openai.com/v1",
   model: "",
   authMethod: "api-key",
+  authHeader: null,
   credentialRef: null,
 };

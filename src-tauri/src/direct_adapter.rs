@@ -210,24 +210,31 @@ pub fn discover_models(
         .build()
         .map_err(|error| error.to_string())?;
     let response = if provider.adapter == "anthropic-messages" {
-        client
-            .get(format!(
-                "{}/v1/models",
-                provider.base_url.trim_end_matches('/')
-            ))
-            .header("x-api-key", secret)
-            .header("anthropic-version", "2023-06-01")
-            .send()
-            .map_err(|error| format!("Claude 模型目录请求失败：{error}"))?
+        apply_api_key_header(
+            client
+                .get(format!(
+                    "{}/v1/models",
+                    provider.base_url.trim_end_matches('/')
+                ))
+                .header("anthropic-version", "2023-06-01"),
+            provider,
+            &secret,
+            "x-api-key",
+        )?
+        .send()
+        .map_err(|error| format!("Claude 模型目录请求失败：{error}"))?
     } else {
-        client
-            .get(format!(
+        apply_api_key_header(
+            client.get(format!(
                 "{}/models",
                 provider.base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(secret)
-            .send()
-            .map_err(|error| format!("模型目录请求失败：{error}"))?
+            )),
+            provider,
+            &secret,
+            "Authorization",
+        )?
+        .send()
+        .map_err(|error| format!("模型目录请求失败：{error}"))?
     };
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
@@ -419,11 +426,11 @@ fn stream_completion(
         .map_err(|error| error.to_string())?;
     if provider.adapter == "anthropic-messages" {
         let url = format!("{}/v1/messages", provider.base_url.trim_end_matches('/'));
-        let response = client
+        let response = apply_api_key_header(
+            client
             .post(url)
-            .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages, "tools": native_tools_anthropic() }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": messages, "tools": native_tools_anthropic() })), provider, &secret, "x-api-key")?
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
         return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
@@ -432,13 +439,36 @@ fn stream_completion(
         "{}/chat/completions",
         provider.base_url.trim_end_matches('/')
     );
-    let response = client
+    let response = apply_api_key_header(
+        client
         .post(url)
-        .bearer_auth(secret)
-        .json(&json!({ "model": model, "messages": messages, "stream": true, "tools": native_tools_openai(), "tool_choice": "auto" }))
+        .json(&json!({ "model": model, "messages": messages, "stream": true, "tools": native_tools_openai(), "tool_choice": "auto" })), provider, &secret, "Authorization")?
         .send()
         .map_err(|error| format!("模型请求失败：{error}"))?;
     stream_sse_response(response, SseProtocol::OpenAiChat, on_delta)
+}
+
+fn apply_api_key_header(
+    request: reqwest::blocking::RequestBuilder,
+    provider: &ProviderConfig,
+    secret: &str,
+    default_header: &str,
+) -> Result<reqwest::blocking::RequestBuilder, String> {
+    let header = provider
+        .auth_header
+        .as_deref()
+        .unwrap_or(default_header)
+        .trim();
+    let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
+        .map_err(|_| "Invalid authentication header name".to_string())?;
+    let value = if header.eq_ignore_ascii_case("authorization") {
+        format!("Bearer {secret}")
+    } else {
+        secret.to_string()
+    };
+    let value = reqwest::header::HeaderValue::from_str(&value)
+        .map_err(|_| "Invalid API key for HTTP request header".to_string())?;
+    Ok(request.header(name, value))
 }
 
 fn native_tools_openai() -> Vec<Value> {
