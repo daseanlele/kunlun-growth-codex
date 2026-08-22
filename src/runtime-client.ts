@@ -87,6 +87,11 @@ export async function activateProviderProfile(profileId: string): Promise<Provid
   return invoke<ProviderConfigPayload>("activate_provider_profile", { profileId });
 }
 
+export async function discoverProviderModels(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>("discover_provider_models");
+}
+
 export async function createAgentThread(cwd: string, model?: string, engine: RuntimeEngine = "codex"): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { thread: { id: "web-preview-thread" } } };
   return invoke<AppServerMessage>("create_thread", { cwd, model: model || null, engine });

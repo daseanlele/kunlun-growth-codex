@@ -110,6 +110,61 @@ pub fn cancel_turn(app: AppHandle, thread_id: String, turn_id: String) -> Result
     Ok(json!({ "turn": { "id": turn_id, "status": "interrupted" } }))
 }
 
+pub fn discover_models(provider: &ProviderConfig) -> Result<Vec<String>, String> {
+    let secret = config::read_api_key(provider)?
+        .ok_or_else(|| format!("{} 尚未配置 API Key", provider.display_name))?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = if provider.adapter == "anthropic-messages" {
+        client
+            .get(format!(
+                "{}/v1/models",
+                provider.base_url.trim_end_matches('/')
+            ))
+            .header("x-api-key", secret)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .map_err(|error| format!("Claude 模型目录请求失败：{error}"))?
+    } else {
+        client
+            .get(format!(
+                "{}/models",
+                provider.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(secret)
+            .send()
+            .map_err(|error| format!("模型目录请求失败：{error}"))?
+    };
+    let status = response.status();
+    let body = response.text().map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|_| format!("模型服务返回了无法解析的模型目录（HTTP {status}）"))?;
+    if !status.is_success() {
+        let message = value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("未知服务错误");
+        return Err(format!("模型目录返回 HTTP {status}：{message}"));
+    }
+    let mut models = value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        Err("模型服务没有返回可用模型".to_string())
+    } else {
+        Ok(models)
+    }
+}
+
 fn stream_completion(
     provider: &ProviderConfig,
     model: &str,

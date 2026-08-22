@@ -356,6 +356,11 @@ fn activate_provider_profile(app: AppHandle, profile_id: String) -> Result<Provi
 }
 
 #[tauri::command]
+fn discover_provider_models(app: AppHandle) -> Result<Vec<String>, String> {
+    direct_adapter::discover_models(&config::load(&app)?)
+}
+
+#[tauri::command]
 fn delete_provider_secret() -> Result<(), String> {
     config::delete_api_key()
 }
@@ -575,6 +580,7 @@ pub fn run() {
             save_provider_config,
             list_provider_profiles,
             activate_provider_profile,
+            discover_provider_models,
             delete_provider_secret,
             list_workspace_files,
             read_workspace_file,
