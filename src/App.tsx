@@ -4,7 +4,7 @@ import { defaultConfig, type ProviderAdapter, type ProviderProtocol } from "./do
 import { matchProvider, providerPresets, type ProviderPreset } from "./domain/providers";
 import { defaultBlockPreferences, featureBlocks, mergeBlockPreferences, moveBlock, updateBlockPreference, visibleBlocks, type BlockPreference } from "./domain/blocks";
 import { mergeTimelineEntry, normalizeRuntimeEvent, runtimeCatalog, timelineFromThreadResponse, type AgentModel, type RuntimeEngine, type RuntimeSession, type TimelineEntry } from "./domain/runtime";
-import { activateProviderProfile, archiveAgentThread, createAgentThread, discoverProviderModels, forkAgentThread, getAgentThreadGoal, getRuntimeStatus, interruptAgentTurn, listAgentModels, listAgentThreads, listCollaborationModes, listMcpServers, listProviderProfiles, listRuntimeSkills, listWorkspaceFiles, loadMcpServers, loadProviderConfig, loadRuntimeSkills, onAppServerNotification, onAppServerRequest, onTerminalExit, onTerminalOutput, readAgentThread, readEffectiveConfig, readGitDiff, readRuntimeAccount, readRuntimeUsage, readWorkspaceFile, renameAgentThread, resizeSandboxTerminal, respondToApproval, respondToServerRequest, resumeAgentThread, runSandboxTerminal, runTerminalCommand, saveProviderConfig, setAgentThreadGoal, setAgentThreadPinned, setRuntimeSkillEnabled, startAgentReview, startAgentTurn, startCodexAccountLogin, startRuntime, steerAgentTurn, stopRuntime, stopSandboxTerminal, stopTerminalCommand, writeSandboxTerminal, type AppServerMessage, type ApprovalDecision, type ProviderConfigPayload, type RuntimeMcpServer, type RuntimeSkill, type RuntimeSnapshot, type WorkspaceEntry } from "./runtime-client";
+import { activateProviderProfile, archiveAgentThread, createAgentThread, discoverProviderModels, forkAgentThread, getAgentThreadGoal, getPreferredRuntimeEngine, getRuntimeStatus, interruptAgentTurn, listAgentModels, listAgentThreads, listCollaborationModes, listMcpServers, listProviderProfiles, listRuntimeSkills, listWorkspaceFiles, loadMcpServers, loadProviderConfig, loadRuntimeSkills, onAppServerNotification, onAppServerRequest, onTerminalExit, onTerminalOutput, readAgentThread, readEffectiveConfig, readGitDiff, readRuntimeAccount, readRuntimeUsage, readWorkspaceFile, renameAgentThread, resizeSandboxTerminal, respondToApproval, respondToServerRequest, resumeAgentThread, runSandboxTerminal, runTerminalCommand, saveProviderConfig, setAgentThreadGoal, setAgentThreadPinned, setRuntimeSkillEnabled, startAgentReview, startAgentTurn, startCodexAccountLogin, startRuntime, steerAgentTurn, stopRuntime, stopSandboxTerminal, stopTerminalCommand, writeSandboxTerminal, type AppServerMessage, type ApprovalDecision, type ProviderConfigPayload, type RuntimeMcpServer, type RuntimeSkill, type RuntimeSnapshot, type WorkspaceEntry } from "./runtime-client";
 
 type View = "workspace" | "providers" | "security" | "extensions" | "blocks" | "account";
 type ThemeMode = "system" | "light" | "dark";
@@ -13,7 +13,7 @@ const initialRuntime: RuntimeSnapshot = { status: "stopped", pid: null, binary: 
 
 export function App() {
   const [view, setView] = useState<View>("workspace");
-  const engine: RuntimeEngine = "codex";
+  const [engine, setEngine] = useState<RuntimeEngine>("codex");
   const [runtime, setRuntime] = useState<RuntimeSnapshot>(initialRuntime);
   const [sessions, setSessions] = useState<RuntimeSession[]>(demoSessions);
   const [activeSession, setActiveSession] = useState("welcome");
@@ -38,7 +38,7 @@ export function App() {
 
   useEffect(() => {
     void getRuntimeStatus().then((snapshot) => setRuntime(snapshot.engine === "codex" ? snapshot : initialRuntime)).catch((error: unknown) => setRuntime({ ...initialRuntime, status: "error", lastError: String(error) }));
-    void Promise.all([loadProviderConfig(), listProviderProfiles()]).then(([config, savedProfiles]) => { applyProvider(config); setProfiles(savedProfiles); });
+    void Promise.all([loadProviderConfig(), listProviderProfiles(), getPreferredRuntimeEngine()]).then(([config, savedProfiles, preferredEngine]) => { applyProvider(config); setProfiles(savedProfiles); setEngine(preferredEngine); });
   }, []);
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: light)");
@@ -71,13 +71,14 @@ export function App() {
       const savedConfig = await saveProviderConfig({ id: profileId, providerId: providerId || "custom", displayName: providerName || "自定义模型", protocol, adapter, baseUrl, model, authMethod: "api-key", authHeader: authHeader.trim() || null, credentialRef: null }, apiKey);
       applyProvider(savedConfig); setProfiles(await listProviderProfiles());
       setApiKey(""); setSaved(true); window.setTimeout(() => setSaved(false), 1800);
-      if (runtime.status === "ready") { await stopRuntime(); setRuntime(await startRuntime(engine)); }
+      const preferredEngine = await getPreferredRuntimeEngine(); setEngine(preferredEngine);
+      if (runtime.status === "ready") { await stopRuntime(); setRuntime(await startRuntime(preferredEngine)); }
     } catch (error) { setRuntime((current) => ({ ...current, status: "error", lastError: String(error) })); }
   }
 
   function applyProvider(config: ProviderConfigPayload) { setProfileId(config.id); setBaseUrl(config.baseUrl); setModel(config.model); setProtocol(config.protocol); setAdapter(config.adapter); setProviderId(config.providerId); setProviderName(config.displayName); setAuthHeader(config.authHeader ?? ""); }
   async function activateProfile(id: string) {
-    try { applyProvider(await activateProviderProfile(id)); if (runtime.status === "ready") { await stopRuntime(); setRuntime(await startRuntime(engine)); } }
+    try { applyProvider(await activateProviderProfile(id)); const preferredEngine = await getPreferredRuntimeEngine(); setEngine(preferredEngine); if (runtime.status === "ready") { await stopRuntime(); setRuntime(await startRuntime(preferredEngine)); } }
     catch (error) { setRuntime((current) => ({ ...current, status: "error", lastError: String(error) })); }
   }
 

@@ -69,6 +69,11 @@ export async function stopRuntime(): Promise<RuntimeSnapshot> {
   return invoke<RuntimeSnapshot>("stop_runtime");
 }
 
+export async function getPreferredRuntimeEngine(): Promise<RuntimeEngine> {
+  if (!isTauri()) return "codex";
+  return invoke<RuntimeEngine>("preferred_runtime_engine");
+}
+
 export async function loadProviderConfig(): Promise<ProviderConfigPayload> {
   if (!isTauri()) return { ...defaultProvider };
   return invoke<ProviderConfigPayload>("load_provider_config");

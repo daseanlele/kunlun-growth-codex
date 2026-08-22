@@ -506,6 +506,10 @@ fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
     development.is_file().then_some(development)
 }
 
+pub fn harness_available(app: &AppHandle) -> bool {
+    resolve_binary(app, "deepseek-harness").is_some()
+}
+
 impl Drop for RuntimeManager {
     fn drop(&mut self) {
         if let Ok(state) = self.state.get_mut() {

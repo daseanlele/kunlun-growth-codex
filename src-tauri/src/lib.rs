@@ -34,6 +34,16 @@ fn stop_runtime(manager: State<'_, RuntimeManager>) -> Result<RuntimeSnapshot, S
 }
 
 #[tauri::command]
+fn preferred_runtime_engine(app: AppHandle) -> String {
+    let provider = config::load(&app).unwrap_or_default();
+    if provider.provider_id == "deepseek" && runtime::harness_available(&app) {
+        "deepseek-harness".to_string()
+    } else {
+        "codex".to_string()
+    }
+}
+
+#[tauri::command]
 fn create_thread(
     app: AppHandle,
     manager: State<'_, RuntimeManager>,
@@ -240,19 +250,6 @@ fn start_turn(
     skill_path: Option<String>,
     history: Option<Vec<direct_adapter::ConversationMessage>>,
 ) -> Result<Value, String> {
-    let provider = config::load(&app)?;
-    if provider.adapter != "codex-responses" {
-        let expanded_text = direct_adapter::expand_workspace_references(&cwd, &text)?;
-        return direct_adapter::start_turn(
-            app,
-            provider,
-            thread_id,
-            cwd,
-            expanded_text,
-            model,
-            history.unwrap_or_default(),
-        );
-    }
     if manager.engine().map_err(|error| error.to_string())? == "deepseek-harness" {
         return manager
             .request(
@@ -266,6 +263,19 @@ fn start_turn(
                 }),
             )
             .map_err(|error| error.to_string());
+    }
+    let provider = config::load(&app)?;
+    if provider.adapter != "codex-responses" {
+        let expanded_text = direct_adapter::expand_workspace_references(&cwd, &text)?;
+        return direct_adapter::start_turn(
+            app,
+            provider,
+            thread_id,
+            cwd,
+            expanded_text,
+            model,
+            history.unwrap_or_default(),
+        );
     }
     let mut input = vec![json!({ "type": "text", "text": text })];
     for path in image_paths.unwrap_or_default() {
@@ -306,7 +316,9 @@ fn interrupt_turn(
     thread_id: String,
     turn_id: String,
 ) -> Result<Value, String> {
-    if config::load(&app)?.adapter != "codex-responses" {
+    if manager.engine().map_err(|error| error.to_string())? != "deepseek-harness"
+        && config::load(&app)?.adapter != "codex-responses"
+    {
         return direct_adapter::cancel_turn(app, thread_id, turn_id);
     }
     manager
@@ -576,6 +588,7 @@ pub fn run() {
             runtime_status,
             start_runtime,
             stop_runtime,
+            preferred_runtime_engine,
             create_thread,
             list_threads,
             read_thread,
