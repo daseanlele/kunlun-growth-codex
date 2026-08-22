@@ -42,6 +42,8 @@ export interface RuntimeMcpServer { name: string; status: string; authStatus: st
 export interface KnowledgeDocument { id: string; source: string; path: string; title: string; updatedAtMs: number; bytes: number }
 export interface KnowledgeScan { source: string; root: string; documents: KnowledgeDocument[]; skipped: number }
 export interface KnowledgeHit { document: KnowledgeDocument; excerpt: string; line: number }
+export interface FeishuConnectorConfig { id: string; appId: string }
+export interface FeishuConnection { connectorId: string; expiresInSeconds: number; authMode: string }
 export interface DirectMessage { role: "user" | "assistant"; content: string }
 
 const webFallback: RuntimeSnapshot = {
@@ -85,6 +87,16 @@ export async function scanObsidianVault(vault: string): Promise<KnowledgeScan> {
 export async function searchObsidianVault(vault: string, query: string): Promise<KnowledgeHit[]> {
   if (!isTauri()) return [];
   return invoke<KnowledgeHit[]>("search_obsidian_vault", { vault, query });
+}
+
+export async function saveFeishuAppSecret(connector: FeishuConnectorConfig, appSecret: string): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("save_feishu_app_secret", { connector, appSecret });
+}
+
+export async function verifyFeishuConnection(connector: FeishuConnectorConfig): Promise<FeishuConnection> {
+  if (!isTauri()) return { connectorId: connector.id, expiresInSeconds: 0, authMode: "tenant_access_token" };
+  return invoke<FeishuConnection>("verify_feishu_connection", { connector });
 }
 
 export async function getPreferredRuntimeEngine(): Promise<RuntimeEngine> {

@@ -206,3 +206,39 @@ pub fn delete_api_key(profile_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+pub fn save_connector_secret(reference: &str, secret: &str) -> Result<(), String> {
+    let reference = validate_connector_secret_reference(reference)?;
+    if secret.trim().is_empty() {
+        return Err("连接器凭据不能为空".to_string());
+    }
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &reference).map_err(|error| error.to_string())?;
+    entry
+        .set_password(secret.trim())
+        .map_err(|error| error.to_string())
+}
+
+pub fn read_connector_secret(reference: &str) -> Result<Option<String>, String> {
+    let reference = validate_connector_secret_reference(reference)?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &reference).map_err(|error| error.to_string())?;
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn validate_connector_secret_reference(reference: &str) -> Result<String, String> {
+    let value = reference.trim();
+    if value.is_empty()
+        || value.len() > 160
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return Err("连接器凭据引用格式无效".to_string());
+    }
+    Ok(value.to_string())
+}

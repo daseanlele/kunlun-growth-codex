@@ -1,5 +1,6 @@
 mod config;
 mod direct_adapter;
+mod feishu;
 mod governance;
 mod knowledge;
 mod runtime;
@@ -426,6 +427,21 @@ fn search_obsidian_vault(
 }
 
 #[tauri::command]
+fn save_feishu_app_secret(
+    connector: feishu::FeishuConnectorConfig,
+    app_secret: String,
+) -> Result<(), String> {
+    feishu::save_app_secret(&connector, &app_secret)
+}
+
+#[tauri::command]
+fn verify_feishu_connection(
+    connector: feishu::FeishuConnectorConfig,
+) -> Result<feishu::FeishuConnection, String> {
+    feishu::verify_connection(&connector)
+}
+
+#[tauri::command]
 fn read_git_diff(cwd: String) -> Result<String, String> {
     workspace::git_diff(&cwd)
 }
@@ -638,6 +654,8 @@ pub fn run() {
             read_workspace_file,
             scan_obsidian_vault,
             search_obsidian_vault,
+            save_feishu_app_secret,
+            verify_feishu_connection,
             read_git_diff,
             run_terminal_command,
             stop_terminal_command,
