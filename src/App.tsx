@@ -3,9 +3,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { defaultConfig, type ProviderProtocol } from "./domain/enterprise-config";
 import { defaultBlockPreferences, featureBlocks, mergeBlockPreferences, moveBlock, updateBlockPreference, visibleBlocks, type BlockPreference } from "./domain/blocks";
 import { mergeTimelineEntry, normalizeRuntimeEvent, runtimeCatalog, timelineFromThreadResponse, type AgentModel, type RuntimeEngine, type RuntimeSession, type TimelineEntry } from "./domain/runtime";
-import { archiveAgentThread, createAgentThread, getRuntimeStatus, interruptAgentTurn, listAgentModels, listAgentThreads, listMcpServers, listRuntimeSkills, listWorkspaceFiles, loadProviderConfig, onAppServerNotification, onAppServerRequest, onTerminalExit, onTerminalOutput, readAgentThread, readGitDiff, readWorkspaceFile, renameAgentThread, respondToApproval, resumeAgentThread, runTerminalCommand, saveProviderConfig, startAgentTurn, startRuntime, stopRuntime, stopTerminalCommand, type AppServerMessage, type RuntimeSnapshot, type WorkspaceEntry } from "./runtime-client";
+import { archiveAgentThread, createAgentThread, forkAgentThread, getRuntimeStatus, interruptAgentTurn, listAgentModels, listAgentThreads, listCollaborationModes, listMcpServers, listRuntimeSkills, listWorkspaceFiles, loadMcpServers, loadProviderConfig, loadRuntimeSkills, onAppServerNotification, onAppServerRequest, onTerminalExit, onTerminalOutput, readAgentThread, readEffectiveConfig, readGitDiff, readRuntimeAccount, readRuntimeUsage, readWorkspaceFile, renameAgentThread, respondToApproval, respondToServerRequest, resumeAgentThread, runTerminalCommand, saveProviderConfig, setRuntimeSkillEnabled, startAgentTurn, startRuntime, steerAgentTurn, stopRuntime, stopTerminalCommand, type AppServerMessage, type ApprovalDecision, type RuntimeMcpServer, type RuntimeSkill, type RuntimeSnapshot, type WorkspaceEntry } from "./runtime-client";
 
-type View = "workspace" | "providers" | "security" | "blocks";
+type View = "workspace" | "providers" | "security" | "extensions" | "blocks" | "account";
 type ThemeMode = "system" | "light" | "dark";
 const demoSessions: RuntimeSession[] = [{ id: "welcome", engine: "codex", title: "欢迎使用昆仑增长", cwd: "", updatedAt: new Date().toISOString(), status: "idle" }];
 const initialRuntime: RuntimeSnapshot = { status: "stopped", pid: null, binary: "codex", engine: "codex", available: true, lastError: null };
@@ -65,15 +65,17 @@ export function App() {
       <aside className="task-sidebar">
         <div className="brand"><span>昆</span><div><b>昆仑增长</b><small>企业 AI 开发工作台</small></div></div>
         <button className="new-task" onClick={() => { setView("workspace"); setActiveSession("welcome"); }}>＋ 新建任务</button>
-        <nav className="main-nav"><button className={view === "workspace" ? "active" : ""} onClick={() => setView("workspace")}><span>⌘</span>任务</button>{enabledNavigation.has("models") && <button className={view === "providers" ? "active" : ""} onClick={() => setView("providers")}><span>⌁</span>模型与内核</button>}{enabledNavigation.has("governance") && <button className={view === "security" ? "active" : ""} onClick={() => setView("security")}><span>◈</span>企业策略</button>}<button className={view === "blocks" ? "active" : ""} onClick={() => setView("blocks")}><span>▦</span>功能积木</button></nav>
+        <nav className="main-nav"><button className={view === "workspace" ? "active" : ""} onClick={() => setView("workspace")}><span>⌘</span>任务</button>{enabledNavigation.has("models") && <button className={view === "providers" ? "active" : ""} onClick={() => setView("providers")}><span>⌁</span>模型与内核</button>}{enabledNavigation.has("governance") && <button className={view === "security" ? "active" : ""} onClick={() => setView("security")}><span>◈</span>企业策略</button>}{enabledNavigation.has("extensions") && <button className={view === "extensions" ? "active" : ""} onClick={() => setView("extensions")}><span>◆</span>扩展能力</button>}<button className={view === "blocks" ? "active" : ""} onClick={() => setView("blocks")}><span>▦</span>功能积木</button></nav>
         <div className="sidebar-label"><span>最近任务</span><button>•••</button></div>
         <div className="session-list">{sessions.map((session) => <button key={session.id} className={activeSession === session.id ? "active" : ""} onClick={() => { setActiveSession(session.id); if (session.cwd) setCwd(session.cwd); setView("workspace"); }}><i className={session.status} /><span><b>{session.title}</b><small>{session.cwd || runtimeCatalog[session.engine].label}</small></span></button>)}</div>
-        <div className="account"><span>本</span><div><b>本地工作区</b><small>数据保留在设备</small></div><button>⚙</button></div>
+        <div className="account"><span>本</span><div><b>本地工作区</b><small>数据保留在设备</small></div><button onClick={() => setView("account")}>⚙</button></div>
       </aside>
       {view === "workspace" && <Workspace engine={engine} runtime={runtime} configuredModel={model} cwd={cwd} blocks={blocks} onCwd={setCwd} activeSession={activeSession} onSession={(session) => { setActiveSession(session.id); setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]); }} onSessions={setSessions} onActiveSession={setActiveSession} onRuntime={setRuntime} />}
       {view === "providers" && <ProviderSettings engine={engine} onEngine={(next) => void activateEngine(next)} baseUrl={baseUrl} model={model} protocol={protocol} apiKey={apiKey} saved={saved} onBaseUrl={setBaseUrl} onModel={setModel} onProtocol={setProtocol} onApiKey={setApiKey} onSave={() => void saveProviderConfig({ protocol, baseUrl, model, authMethod: "api-key", credentialRef: null }, apiKey).then(() => { setApiKey(""); setSaved(true); window.setTimeout(() => setSaved(false), 1800); })} />}
       {view === "security" && <SecuritySettings />}
+      {view === "extensions" && <ExtensionSettings engine={engine} runtime={runtime} cwd={cwd} />}
       {view === "blocks" && <BlocksSettings preferences={blocks} engine={engine} onChange={setBlocks} />}
+      {view === "account" && <AccountSettings engine={engine} runtime={runtime} />}
     </div>
   </main>;
 }
@@ -81,7 +83,7 @@ export function App() {
 interface WorkspaceProps { engine: RuntimeEngine; runtime: RuntimeSnapshot; configuredModel: string; cwd: string; activeSession: string; blocks: BlockPreference[]; onCwd(value: string): void; onSession(value: RuntimeSession): void; onSessions(value: RuntimeSession[] | ((current: RuntimeSession[]) => RuntimeSession[])): void; onActiveSession(value: string): void; onRuntime(value: RuntimeSnapshot): void }
 function Workspace({ engine, runtime, configuredModel, cwd, blocks, onCwd, activeSession, onSession, onSessions, onActiveSession, onRuntime }: WorkspaceProps) {
   const [threadId, setThreadId] = useState<string | null>(activeSession === "welcome" ? null : activeSession);
-  const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false); const [timeline, setTimeline] = useState<TimelineEntry[]>([]); const [approval, setApproval] = useState<AppServerMessage | null>(null); const [diff, setDiff] = useState("");
+  const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false); const [timeline, setTimeline] = useState<TimelineEntry[]>([]); const [approvals, setApprovals] = useState<AppServerMessage[]>([]); const [diff, setDiff] = useState("");
   const [turnId, setTurnId] = useState<string | null>(null); const [resumedId, setResumedId] = useState<string | null>(null); const [models, setModels] = useState<AgentModel[]>([]); const [selectedModel, setSelectedModel] = useState(configuredModel); const [effort, setEffort] = useState("medium"); const [historyLoading, setHistoryLoading] = useState(false);
   const [showFiles, setShowFiles] = useState(false); const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceEntry[]>([]); const [selectedFile, setSelectedFile] = useState<string | null>(null); const [fileContent, setFileContent] = useState(""); const [fileQuery, setFileQuery] = useState("");
   const [showTerminal, setShowTerminal] = useState(false); const [terminalCommand, setTerminalCommand] = useState(""); const [terminalOutput, setTerminalOutput] = useState(""); const [terminalId, setTerminalId] = useState<string | null>(null); const [terminalExitCode, setTerminalExitCode] = useState<number | null>(null);
@@ -98,8 +100,8 @@ function Workspace({ engine, runtime, configuredModel, cwd, blocks, onCwd, activ
   }, [engine, runtime.status, configuredModel]);
   useEffect(() => {
     const cleanups: Array<() => void> = [];
-    void onAppServerNotification((message) => { const entry = normalizeRuntimeEvent(message); if (entry) setTimeline((current) => mergeTimelineEntry(current, entry).slice(-200)); if (message.method === "turn/started") { const id = nestedId(message, "turn"); if (id) setTurnId(id); } if (message.method?.includes("diff")) setDiff(String(message.params?.diff ?? "")); if (message.method === "turn/completed" || message.method === "turn/end") { setBusy(false); setTurnId(null); if (cwd) void readGitDiff(cwd).then(setDiff).catch(() => undefined); } }).then((cleanup) => cleanups.push(cleanup));
-    void onAppServerRequest(setApproval).then((cleanup) => cleanups.push(cleanup)); return () => cleanups.forEach((cleanup) => cleanup());
+    void onAppServerNotification((message) => { const entry = normalizeRuntimeEvent(message); if (entry) setTimeline((current) => mergeTimelineEntry(current, entry).slice(-200)); if (message.method === "turn/started") { const id = nestedId(message, "turn"); if (id) setTurnId(id); } if (message.method?.includes("diff")) setDiff(String(message.params?.diff ?? "")); if (message.method === "serverRequest/resolved") { const requestId = message.params?.requestId; if (requestId !== undefined) setApprovals((current) => current.filter((item) => String(item.id) !== String(requestId))); } if (message.method === "turn/completed" || message.method === "turn/end") { setBusy(false); setTurnId(null); if (cwd) void readGitDiff(cwd).then(setDiff).catch(() => undefined); } }).then((cleanup) => cleanups.push(cleanup));
+    void onAppServerRequest((message) => setApprovals((current) => current.some((item) => String(item.id) === String(message.id)) ? current : [...current, message])).then((cleanup) => cleanups.push(cleanup)); return () => cleanups.forEach((cleanup) => cleanup());
   }, [cwd]);
   useEffect(() => {
     const cleanups: Array<() => void> = [];
@@ -113,7 +115,13 @@ function Workspace({ engine, runtime, configuredModel, cwd, blocks, onCwd, activ
   function referenceFile(path: string) { setPrompt((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}@${path} `); setShowFiles(false); }
   async function executeTerminal() { const command = terminalCommand.trim(); if (!cwd || !command || terminalId) return; setTerminalExitCode(null); setTerminalOutput((current) => `${current}${current ? "\n" : ""}> ${command}\n`); const id = await runTerminalCommand(cwd, command); setTerminalId(id); setTerminalCommand(""); if (id.startsWith("web-terminal")) { setTerminalOutput((current) => `${current}Web 预览不执行系统命令；桌面版会流式显示真实输出。\n`); setTerminalId(null); setTerminalExitCode(0); } }
   async function send() {
-    const text = prompt.trim(); if (!text || busy) return; if (!cwd) { await chooseProject(); return; }
+    const text = prompt.trim(); if (!text) return; if (!cwd) { await chooseProject(); return; }
+    if (busy) {
+      if (!threadId || !turnId || engine !== "codex") return;
+      setPrompt(""); setTimeline((current) => [...current, { id: `steer-${Date.now()}`, kind: "message", title: "追加指令", text, status: "completed" }]);
+      try { await steerAgentTurn(threadId, turnId, text); } catch (error) { setTimeline((current) => [...current, { id: `steer-error-${Date.now()}`, kind: "error", title: "追加指令失败", text: String(error), status: "failed" }]); }
+      return;
+    }
     setPrompt(""); setBusy(true); setTimeline((current) => [...current, { id: `user-${Date.now()}`, kind: "message", title: "你", text, status: "completed" }]);
     try {
       if (runtime.status !== "ready") onRuntime(await startRuntime(engine));
@@ -132,8 +140,21 @@ function Workspace({ engine, runtime, configuredModel, cwd, blocks, onCwd, activ
     if (!threadId || engine !== "codex") return;
     await archiveAgentThread(threadId); onSessions((current) => current.filter((session) => session.id !== threadId)); onActiveSession("welcome"); setThreadId(null); setTimeline([]);
   }
+  async function forkCurrent() {
+    if (!threadId || engine !== "codex" || busy) return;
+    const response = await forkAgentThread(threadId); const forkedId = nestedId(response, "thread"); if (!forkedId) return;
+    onSession({ id: forkedId, engine, title: "分叉任务", cwd, updatedAt: new Date().toISOString(), status: "idle" }); setThreadId(forkedId); setResumedId(forkedId); setTimeline(timelineFromThreadResponse(response as Record<string, unknown>));
+  }
   async function interruptCurrent() {
     if (!threadId || !turnId) return; await interruptAgentTurn(threadId, turnId); setBusy(false); setTurnId(null);
+  }
+  async function resolveApproval(message: AppServerMessage, decision: ApprovalDecision) {
+    if (message.id === undefined) return;
+    const method = message.method ?? ""; const params = message.params ?? {};
+    if (method.includes("permissions/requestApproval")) { const requested = (params.permissions ?? params.requestedPermissions ?? {}) as Record<string, unknown>; await respondToServerRequest(message.id, { permissions: decision.startsWith("accept") ? requested : {}, scope: decision === "acceptForSession" ? "session" : "turn" }); }
+    else if (method.includes("mcpServer/elicitation")) await respondToServerRequest(message.id, { action: decision === "accept" || decision === "acceptForSession" ? "accept" : decision === "cancel" ? "cancel" : "decline", content: null });
+    else await respondToApproval(message.id, decision);
+    setApprovals((current) => current.filter((item) => String(item.id) !== String(message.id)));
   }
   const stats = useMemo(() => ({ commands: timeline.filter((item) => item.kind === "command").length, files: timeline.filter((item) => item.kind === "file").length }), [timeline]);
   const selectedCatalogModel = models.find((item) => item.model === selectedModel);
@@ -142,9 +163,9 @@ function Workspace({ engine, runtime, configuredModel, cwd, blocks, onCwd, activ
   const visibleTimeline = timeline.filter((entry) => (entry.kind !== "plan" || composerBlockIds.has("plan")) && (entry.kind !== "command" || composerBlockIds.has("terminal")));
   return <section className="workspace-grid">
     <section className="conversation-pane">
-      <header className="pane-header"><div><small>{cwd ? compactPath(cwd) : "未选择项目"}</small><h1>{threadId ? "开发任务" : "新任务"}</h1></div><div>{threadId && engine === "codex" && <><button className="icon-button" onClick={() => void renameCurrent()} title="重命名">✎</button><button className="icon-button" onClick={() => void archiveCurrent()} title="归档">▣</button></>}<button className="ghost-button" onClick={() => void chooseProject()}>▰ {cwd ? "更换项目" : "打开项目"}</button><span className="engine-chip">{runtimeCatalog[engine].label}</span></div></header>
+      <header className="pane-header"><div><small>{cwd ? compactPath(cwd) : "未选择项目"}</small><h1>{threadId ? "开发任务" : "新任务"}</h1></div><div>{threadId && engine === "codex" && <><button className="icon-button" disabled={busy} onClick={() => void forkCurrent()} title="分叉为新任务">⑂</button><button className="icon-button" onClick={() => void renameCurrent()} title="重命名">✎</button><button className="icon-button" onClick={() => void archiveCurrent()} title="归档">▣</button></>}<button className="ghost-button" onClick={() => void chooseProject()}>▰ {cwd ? "更换项目" : "打开项目"}</button><span className="engine-chip">{runtimeCatalog[engine].label}</span></div></header>
       <div className={`timeline ${visibleTimeline.length === 0 ? "empty" : ""}`}>{historyLoading && <div className="history-loading">正在恢复完整会话…</div>}{visibleTimeline.length === 0 && !historyLoading && <Welcome onPrompt={setPrompt} />}{visibleTimeline.map((entry, index) => <TimelineCard key={`${entry.id}-${index}`} entry={entry} />)}</div>
-      {approval?.id !== undefined && <div className="approval-card"><span>!</span><div><b>运行时请求授权</b><small>{approval.method ?? "敏感操作"}</small></div><button onClick={() => { void respondToApproval(approval.id!, "decline"); setApproval(null); }}>拒绝</button><button className="primary" onClick={() => { void respondToApproval(approval.id!, "accept"); setApproval(null); }}>允许一次</button></div>}
+      {approvals.length > 0 && <ApprovalCenter approvals={approvals} onResolve={(message, decision) => void resolveApproval(message, decision)} />}
       <div className="composer"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={cwd ? "描述任务，@ 引用文件，Shift+Enter 换行" : "先打开一个项目，然后开始任务"} /><div className="composer-mode-row">{composerBlocks.map((block) => <button key={block.id} onClick={() => { if (block.id === "terminal") setShowTerminal(true); }}>{block.icon} {block.name}</button>)}</div><div className="composer-tools"><span><button onClick={() => void openFiles()}>＋</button><button onClick={() => void openFiles()}>@</button>{engine === "codex" && models.length > 0 ? <select value={selectedModel} onChange={(event) => { const next = models.find((item) => item.model === event.target.value); setSelectedModel(event.target.value); if (next) setEffort(next.defaultReasoningEffort); }}>{models.map((item) => <option key={item.id} value={item.model}>{item.displayName}</option>)}</select> : <em>{selectedModel || configuredModel || "默认模型"}</em>}{engine === "codex" && selectedCatalogModel && <select value={effort} onChange={(event) => setEffort(event.target.value)}>{selectedCatalogModel.supportedReasoningEfforts.map((item) => <option key={item.reasoningEffort} value={item.reasoningEffort}>{effortName(item.reasoningEffort)}</option>)}</select>}</span>{busy ? <button className="stop-button" onClick={() => void interruptCurrent()}>■</button> : <button className="send-button" disabled={!prompt.trim()} onClick={() => void send()}>↑</button>}</div></div>
     </section>
     <Inspector engine={engine} runtime={runtime} cwd={cwd} threadId={threadId} stats={stats} diff={diff} blocks={blocks} onProject={chooseProject} onFiles={openFiles} onDiff={setDiff} />
@@ -176,6 +197,12 @@ function Inspector({ engine, runtime, cwd, threadId, stats, diff, blocks, onProj
   })}</aside>;
 }
 
+function ApprovalCenter({ approvals, onResolve }: { approvals: AppServerMessage[]; onResolve(message: AppServerMessage, decision: ApprovalDecision): void }) {
+  const request = approvals[0]; const details = approvalDetails(request); const available = Array.isArray(request.params?.availableDecisions) ? request.params!.availableDecisions.map(String) : [];
+  const allowSession = available.length === 0 || available.includes("acceptForSession");
+  return <section className="approval-center"><header><span>!</span><div><b>{details.title}</b><small>{approvals.length > 1 ? `还有 ${approvals.length - 1} 个审批等待处理` : details.subtitle}</small></div><em>{details.kind}</em></header>{details.command && <pre>{details.command}</pre>}{details.reason && <p>{details.reason}</p>}{details.target && <code>{details.target}</code>}<footer><button onClick={() => onResolve(request, "cancel")}>取消任务</button><button onClick={() => onResolve(request, "decline")}>拒绝</button>{allowSession && <button onClick={() => onResolve(request, "acceptForSession")}>本会话允许</button>}<button className="primary" onClick={() => onResolve(request, "accept")}>允许一次</button></footer></section>;
+}
+
 function FileBrowser({ files, query, selected, content, onQuery, onSelect, onReference, onClose }: { files: WorkspaceEntry[]; query: string; selected: string | null; content: string; onQuery(value: string): void; onSelect(path: string): void; onReference(path: string): void; onClose(): void }) {
   const filtered = files.filter((entry) => !entry.isDir && (!query || entry.path.toLowerCase().includes(query.toLowerCase()))).slice(0, 500);
   return <div className="workspace-overlay" role="dialog" aria-label="工作区文件"><section className="file-browser"><header><div><small>工作区</small><h2>浏览与引用文件</h2></div><button onClick={onClose}>×</button></header><div className="file-search"><span>⌕</span><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="按路径搜索文件" /><em>{filtered.length} 个文件</em></div><div className="file-browser-grid"><nav>{filtered.map((entry) => <button key={entry.path} className={selected === entry.path ? "active" : ""} onClick={() => onSelect(entry.path)}><span>{fileIcon(entry.path)}</span><div><b>{entry.name}</b><small>{entry.path}</small></div><em>{formatBytes(entry.size)}</em></button>)}</nav><article>{selected ? <><header><code>@{selected}</code><button onClick={() => onReference(selected)}>引用到任务</button></header><pre>{content}</pre></> : <div className="file-empty"><span>▤</span><b>选择文件预览</b><p>文件内容只从当前授权工作区读取。</p></div>}</article></div></section></div>;
@@ -195,6 +222,40 @@ function DiffReview({ cwd, diff, onDiff }: { cwd: string; diff: string; onDiff(v
 interface ProviderProps { engine: RuntimeEngine; baseUrl: string; model: string; protocol: ProviderProtocol; apiKey: string; saved: boolean; onEngine(value: RuntimeEngine): void; onBaseUrl(value: string): void; onModel(value: string): void; onProtocol(value: ProviderProtocol): void; onApiKey(value: string): void; onSave(): void }
 function ProviderSettings(props: ProviderProps) { return <section className="settings-page"><header><small>设置</small><h1>模型与代理内核</h1><p>每个任务绑定一套代理内核；模型凭据仅保存在系统安全凭据库。</p></header><div className="settings-section"><h2>代理内核</h2><div className="engine-options">{(["codex", "deepseek-harness"] as RuntimeEngine[]).map((item) => <button key={item} className={props.engine === item ? "active" : ""} onClick={() => props.onEngine(item)}><span>{item === "codex" ? "⌘" : "深"}</span><div><b>{runtimeCatalog[item].label}</b><small>{item === "codex" ? "完整 App Server、Diff、审批与 Skills" : "插件化 Agent Loop、Code Mode 与子代理"}</small></div><i>{props.engine === item ? "✓" : ""}</i></button>)}</div></div><div className="settings-section"><h2>模型服务</h2><div className="form-grid"><label>协议<select value={props.protocol} onChange={(event) => props.onProtocol(event.target.value as ProviderProtocol)}><option value="openai">OpenAI</option><option value="azure-openai">Azure OpenAI</option><option value="openai-compatible">OpenAI-compatible / DeepSeek</option></select></label><label>模型 ID<input value={props.model} onChange={(event) => props.onModel(event.target.value)} placeholder={props.engine === "codex" ? "gpt-5.6-terra" : "deepseek-v4-flash"} /></label><label className="full">API Base URL<input value={props.baseUrl} onChange={(event) => props.onBaseUrl(event.target.value)} /></label><label className="full">API Key<input type="password" value={props.apiKey} onChange={(event) => props.onApiKey(event.target.value)} placeholder="安全保存，不写入项目配置" /></label></div><div className="settings-actions"><button className="primary" disabled={!props.baseUrl.startsWith("https://")} onClick={props.onSave}>{props.saved ? "已保存 ✓" : "保存配置"}</button></div></div></section>; }
 function SecuritySettings() { return <section className="settings-page"><header><small>企业治理</small><h1>安全策略</h1><p>策略在桌面核心执行，网页界面无法绕过。</p></header><div className="policy-grid"><Policy title="命令执行" value="风险操作审批" detail="普通读取自动执行，写入、安装与系统命令需要批准。" /><Policy title="文件访问" value="仅当前工作区" detail="默认禁止访问项目目录之外的文件。" /><Policy title="网络访问" value="默认关闭" detail="按域名白名单为单次任务开放网络。" /><Policy title="凭据与审计" value="系统凭据库" detail="密钥不进入模型上下文，日志默认本地保存并脱敏。" /></div></section>; }
+function ExtensionSettings({ engine, runtime, cwd }: { engine: RuntimeEngine; runtime: RuntimeSnapshot; cwd: string }) {
+  const [skills, setSkills] = useState<RuntimeSkill[]>([]); const [servers, setServers] = useState<RuntimeMcpServer[]>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState("");
+  async function refresh() {
+    if (runtime.status !== "ready" || !cwd || engine !== "codex") return;
+    setLoading(true); setError("");
+    try { const [nextSkills, nextServers] = await Promise.all([loadRuntimeSkills(cwd), loadMcpServers()]); setSkills(nextSkills); setServers(nextServers); }
+    catch (reason) { setError(String(reason)); } finally { setLoading(false); }
+  }
+  useEffect(() => { void refresh(); }, [engine, runtime.status, cwd]);
+  async function toggleSkill(skill: RuntimeSkill) {
+    if (!skill.path) return;
+    const enabled = !skill.enabled; setSkills((current) => current.map((item) => item.path === skill.path ? { ...item, enabled } : item));
+    try { await setRuntimeSkillEnabled(skill.path, enabled); } catch (reason) { setSkills((current) => current.map((item) => item.path === skill.path ? skill : item)); setError(String(reason)); }
+  }
+  const unavailable = engine !== "codex" || runtime.status !== "ready" || !cwd;
+  return <section className="settings-page extensions-page"><header><small>积木运行时</small><h1>扩展能力</h1><p>Skills、MCP 和 DeepSeek Harness 都是可选择的能力积木；开关会写入代理内核配置。</p></header>{unavailable && <div className="extension-notice">{engine !== "codex" ? "DeepSeek Harness 兼容层尚处开发预览，请切换 Codex 内核管理正式扩展。" : runtime.status !== "ready" ? "先启动 Codex 内核，再读取扩展状态。" : "先在任务页选择一个工作区。"}</div>}{error && <div className="extension-error">{error}</div>}<div className="extension-toolbar"><div><b>{skills.filter((item) => item.enabled).length}</b><span>启用 Skills</span></div><div><b>{servers.length}</b><span>MCP 服务</span></div><button onClick={() => void refresh()} disabled={unavailable || loading}>{loading ? "读取中…" : "刷新状态"}</button></div><section className="extension-section"><header><div><h2>Skills</h2><p>把团队规范和专业流程按需装入代理上下文。</p></div></header><div className="extension-grid">{skills.map((skill) => <article key={`${skill.path}-${skill.name}`}><span>◆</span><div><b>{skill.name}</b><p>{skill.description}</p><small>{skill.scope}</small></div><label className="block-switch"><input type="checkbox" checked={skill.enabled} disabled={!skill.path} onChange={() => void toggleSkill(skill)} /><span /></label></article>)}{!skills.length && <EmptyExtension text={unavailable ? "连接工作区后读取 Skills" : "当前没有发现 Skills"} />}</div></section><section className="extension-section"><header><div><h2>MCP 服务</h2><p>连接企业系统、数据源和外部工具。</p></div></header><div className="extension-grid">{servers.map((server) => <article key={server.name}><span>⌘</span><div><b>{server.name}</b><p>{server.toolCount} 个工具 · 授权 {server.authStatus}</p><small>{server.status}</small></div><em className={`server-state ${server.status}`}>{server.status}</em></article>)}{!servers.length && <EmptyExtension text={unavailable ? "连接工作区后读取 MCP" : "当前没有配置 MCP 服务"} />}</div></section><section className="extension-section"><header><div><h2>兼容运行时</h2><p>通过稳定适配器接入不同 Agent Harness。</p></div></header><div className="extension-grid"><article><span>深</span><div><b>DeepSeek Harness</b><p>Code Mode、子代理与插件协议兼容层</p><small>Developer Preview · 独立积木</small></div><em className="server-state preview">预览</em></article></div></section></section>;
+}
+function EmptyExtension({ text }: { text: string }) { return <div className="extension-empty">{text}</div>; }
+function AccountSettings({ engine, runtime }: { engine: RuntimeEngine; runtime: RuntimeSnapshot }) {
+  const [account, setAccount] = useState<Record<string, unknown>>({}); const [usage, setUsage] = useState<Record<string, unknown>>({}); const [config, setConfig] = useState<Record<string, unknown>>({}); const [modes, setModes] = useState<Array<Record<string, unknown>>>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState("");
+  async function refresh() {
+    if (engine !== "codex" || runtime.status !== "ready") return;
+    setLoading(true); setError("");
+    const results = await Promise.allSettled([readRuntimeAccount(), readRuntimeUsage(), listCollaborationModes(), readEffectiveConfig()]);
+    const rejected = results.find((item) => item.status === "rejected"); if (rejected?.status === "rejected") setError(String(rejected.reason));
+    if (results[0].status === "fulfilled") setAccount(unwrapResult(results[0].value));
+    if (results[1].status === "fulfilled") setUsage(unwrapResult(results[1].value));
+    if (results[2].status === "fulfilled") { const source = unwrapResult(results[2].value); setModes((Array.isArray(source.data) ? source.data : Array.isArray(source.modes) ? source.modes : []) as Array<Record<string, unknown>>); }
+    if (results[3].status === "fulfilled") setConfig(unwrapResult(results[3].value)); setLoading(false);
+  }
+  useEffect(() => { void refresh(); }, [engine, runtime.status]);
+  const accountInfo = (account.account && typeof account.account === "object" ? account.account : account) as Record<string, unknown>; const configInfo = (config.config && typeof config.config === "object" ? config.config : config) as Record<string, unknown>;
+  return <section className="settings-page account-page"><header><small>Codex 内核</small><h1>账户与运行配置</h1><p>读取 App Server 当前账户、用量窗口、协作模式与最终生效的安全配置。</p></header>{(engine !== "codex" || runtime.status !== "ready") && <div className="extension-notice">请先选择并启动 Codex 内核。</div>}{error && <div className="extension-error">部分状态读取失败：{error}</div>}<div className="account-summary"><article><small>身份</small><b>{String(accountInfo.email ?? accountInfo.name ?? accountInfo.type ?? "未登录 / API Key")}</b><p>{account.requiresOpenaiAuth === false ? "当前配置允许 API 凭据运行" : "使用 Codex 账户授权"}</p></article><article><small>用量窗口</small><b>{usageSummary(usage)}</b><p>数据由 App Server 账户用量接口提供</p></article><article><small>协作模式</small><b>{modes.length || "默认"}</b><p>{modes.slice(0, 3).map((mode) => String(mode.name ?? mode.mode ?? mode.id ?? "")).filter(Boolean).join("、") || "Default"}</p></article><article><small>安全沙箱</small><b>{String(configInfo.sandboxMode ?? configInfo.sandbox_mode ?? "workspaceWrite")}</b><p>审批：{String(configInfo.approvalPolicy ?? configInfo.approval_policy ?? "unlessTrusted")}</p></article></div><div className="settings-section"><div className="config-header"><h2>生效配置</h2><button onClick={() => void refresh()} disabled={loading || runtime.status !== "ready"}>{loading ? "读取中…" : "刷新"}</button></div><pre className="config-preview">{JSON.stringify(configInfo, null, 2)}</pre></div></section>;
+}
 function BlocksSettings({ preferences, engine, onChange }: { preferences: BlockPreference[]; engine: RuntimeEngine; onChange(value: BlockPreference[]): void }) {
   const preferenceMap = new Map(preferences.map((item) => [item.id, item]));
   return <section className="settings-page blocks-page"><header><small>自由组合</small><h1>功能积木</h1><p>每一项能力都是独立积木。选择展示或隐藏并调整顺序，工作台会立即重组；带锁积木由安全边界或企业策略固定。</p></header><div className="block-toolbar"><div><b>{preferences.filter((item) => item.enabled).length}</b><span>已启用</span></div><div><b>{featureBlocks.length}</b><span>可用积木</span></div><button onClick={() => onChange(defaultBlockPreferences())}>恢复默认布局</button></div>{(["navigation", "inspector", "composer", "runtime"] as const).map((slot) => {
@@ -204,7 +265,27 @@ function BlocksSettings({ preferences, engine, onChange }: { preferences: BlockP
 }
 function Policy({ title, value, detail }: { title: string; value: string; detail: string }) { return <article className="policy"><span>◈</span><div><small>{title}</small><h2>{value}</h2><p>{detail}</p></div><em>可托管</em></article>; }
 function nestedId(message: AppServerMessage, kind: "thread" | "session" | "turn"): string | null { const source = (message.result ?? message.params ?? message) as Record<string, unknown>; const nested = source[kind] as Record<string, unknown> | undefined; return typeof nested?.id === "string" ? nested.id : typeof source.sessionId === "string" ? source.sessionId : null; }
+function unwrapResult(message: AppServerMessage) { return (message.result ?? message) as Record<string, unknown>; }
+function usageSummary(usage: Record<string, unknown>) { const limits = Array.isArray(usage.rateLimits) ? usage.rateLimits as Array<Record<string, unknown>> : []; const first = limits[0]; if (!first) return "暂无数据"; const used = Number(first.usedPercent ?? first.used_percent ?? 0); return Number.isFinite(used) ? `${Math.round(used)}% 已用` : "已连接"; }
 function compactPath(path: string) { return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path; }
+function approvalDetails(message: AppServerMessage) {
+  const method = message.method ?? ""; const params = message.params ?? {};
+  const reason = typeof params.reason === "string" ? params.reason : "";
+  const rawCommand = params.command;
+  const command = Array.isArray(rawCommand) ? rawCommand.map(String).join(" ") : typeof rawCommand === "string" ? rawCommand : "";
+  const network = params.networkApprovalContext && typeof params.networkApprovalContext === "object" ? params.networkApprovalContext as Record<string, unknown> : null;
+  if (network) {
+    const host = String(network.host ?? network.hostname ?? "未知主机"); const port = network.port ? `:${network.port}` : ""; const protocol = network.protocol ? `${network.protocol}://` : "";
+    return { title: "请求网络访问", subtitle: "代理希望连接工作区之外的服务", kind: "网络", command, reason, target: `${protocol}${host}${port}` };
+  }
+  if (method.includes("fileChange")) return { title: "请求修改文件", subtitle: String(params.cwd ?? "请检查变更范围"), kind: "文件", command, reason, target: String(params.grantRoot ?? params.path ?? "") };
+  if (method.includes("permissions")) {
+    const permissions = params.permissions ?? params.requestedPermissions ?? {};
+    return { title: "请求额外权限", subtitle: "可仅为本轮或整个会话授权", kind: "权限", command, reason, target: typeof permissions === "string" ? permissions : JSON.stringify(permissions, null, 2) };
+  }
+  if (method.includes("mcpServer/elicitation")) return { title: "MCP 服务请求确认", subtitle: String(params.serverName ?? "外部工具需要你的确认"), kind: "MCP", command, reason, target: String(params.message ?? params.url ?? "") };
+  return { title: "请求执行命令", subtitle: String(params.cwd ?? "请确认命令内容"), kind: "命令", command, reason, target: "" };
+}
 function iconFor(kind: TimelineEntry["kind"]) { return ({ message: "◆", reasoning: "◇", command: ">_", file: "±", tool: "⌁", plan: "☷", status: "✓", error: "!" })[kind]; }
 function capabilityName(name: string) { return ({ history: "会话恢复", approvals: "安全审批", diff: "Diff 审阅", plan: "任务计划", subagents: "子代理", codeMode: "Code Mode" } as Record<string, string>)[name] ?? name; }
 function capabilityEnabled(name: string, enabledBlocks: Set<string>) { if (name === "subagents" || name === "codeMode") return false; if (name === "plan") return enabledBlocks.has("plan"); if (name === "diff") return enabledBlocks.has("diff"); return true; }

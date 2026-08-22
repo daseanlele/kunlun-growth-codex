@@ -147,6 +147,11 @@ fn archive_thread(manager: State<'_, RuntimeManager>, thread_id: String) -> Resu
 }
 
 #[tauri::command]
+fn fork_thread(manager: State<'_, RuntimeManager>, thread_id: String, last_turn_id: Option<String>) -> Result<Value, String> {
+    manager.request("thread/fork", json!({ "threadId": thread_id, "lastTurnId": last_turn_id })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn start_turn(
     manager: State<'_, RuntimeManager>,
     thread_id: String,
@@ -201,6 +206,12 @@ fn interrupt_turn(
             json!({ "threadId": thread_id, "turnId": turn_id }),
         )
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn steer_turn(manager: State<'_, RuntimeManager>, thread_id: String, turn_id: String, text: String) -> Result<Value, String> {
+    if text.trim().is_empty() { return Err("Steering input cannot be empty".to_string()); }
+    manager.request("turn/steer", json!({ "threadId": thread_id, "expectedTurnId": turn_id, "input": [{ "type": "text", "text": text.trim() }] })).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -274,11 +285,48 @@ fn list_skills(manager: State<'_, RuntimeManager>, cwd: String) -> Result<Value,
 }
 
 #[tauri::command]
+fn set_skill_enabled(
+    manager: State<'_, RuntimeManager>,
+    path: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    if path.trim().is_empty() {
+        return Err("Skill path cannot be empty".to_string());
+    }
+    manager
+        .request(
+            "skills/config/write",
+            json!({ "path": path, "enabled": enabled }),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn list_mcp_servers(
     manager: State<'_, RuntimeManager>,
     thread_id: Option<String>,
 ) -> Result<Value, String> {
     manager.request("mcpServerStatus/list", json!({ "threadId": thread_id, "cursor": null, "limit": 100, "detail": "toolsAndAuthOnly" })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_account(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
+    manager.request("account/read", json!({ "refreshToken": false })).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_account_usage(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
+    manager.request("account/usage/read", json!({})).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_collaboration_modes(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
+    manager.request("collaborationMode/list", json!({})).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_effective_config(manager: State<'_, RuntimeManager>) -> Result<Value, String> {
+    manager.request("config/read", json!({ "includeLayers": false })).map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -299,8 +347,10 @@ pub fn run() {
             list_models,
             set_thread_name,
             archive_thread,
+            fork_thread,
             start_turn,
             interrupt_turn,
+            steer_turn,
             respond_server_request,
             load_provider_config,
             save_provider_config,
@@ -311,7 +361,12 @@ pub fn run() {
             run_terminal_command,
             stop_terminal_command,
             list_skills,
-            list_mcp_servers
+            set_skill_enabled,
+            list_mcp_servers,
+            read_account,
+            read_account_usage,
+            list_collaboration_modes,
+            read_effective_config
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Kunlun Growth");

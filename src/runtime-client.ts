@@ -32,6 +32,8 @@ export interface AppServerMessage {
 export interface WorkspaceEntry { path: string; name: string; isDir: boolean; size: number }
 export interface TerminalOutputEvent { id: string; stream: "stdout" | "stderr"; chunk: string }
 export interface TerminalExitEvent { id: string; code: number | null }
+export interface RuntimeSkill { name: string; description: string; enabled: boolean; path: string; scope: string }
+export interface RuntimeMcpServer { name: string; status: string; authStatus: string; toolCount: number }
 
 const webFallback: RuntimeSnapshot = {
   status: "stopped",
@@ -126,14 +128,31 @@ export async function archiveAgentThread(threadId: string): Promise<void> {
   await invoke("archive_thread", { threadId });
 }
 
+export async function forkAgentThread(threadId: string, lastTurnId?: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { thread: { id: `web-fork-${Date.now()}`, forkedFromId: threadId } } };
+  return invoke<AppServerMessage>("fork_thread", { threadId, lastTurnId: lastTurnId || null });
+}
+
 export async function interruptAgentTurn(threadId: string, turnId: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("interrupt_turn", { threadId, turnId });
 }
 
-export async function respondToApproval(id: string | number, decision: "accept" | "decline"): Promise<void> {
+export async function steerAgentTurn(threadId: string, turnId: string, text: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { turnId } };
+  return invoke<AppServerMessage>("steer_turn", { threadId, turnId, text });
+}
+
+export type ApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+
+export async function respondToApproval(id: string | number, decision: ApprovalDecision): Promise<void> {
   if (!isTauri()) return;
   await invoke("respond_server_request", { id, result: { decision } });
+}
+
+export async function respondToServerRequest(id: string | number, result: Record<string, unknown>): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("respond_server_request", { id, result });
 }
 
 export async function listWorkspaceFiles(cwd: string): Promise<WorkspaceEntry[]> {
@@ -182,9 +201,65 @@ export async function listRuntimeSkills(cwd: string): Promise<AppServerMessage> 
   return invoke<AppServerMessage>("list_skills", { cwd });
 }
 
+export async function loadRuntimeSkills(cwd: string): Promise<RuntimeSkill[]> {
+  const response = await listRuntimeSkills(cwd);
+  const source = (response.result ?? response) as Record<string, unknown>;
+  const groups = Array.isArray(source.data) ? source.data as Array<Record<string, unknown>> : [];
+  return groups.flatMap((group) => {
+    const rows = Array.isArray(group.skills) ? group.skills as Array<Record<string, unknown>> : [];
+    return rows.map((skill) => ({
+      name: String(skill.name ?? skill.displayName ?? "未命名 Skill"),
+      description: String(skill.description ?? "可复用的代理工作流程"),
+      enabled: skill.enabled !== false,
+      path: String(skill.path ?? skill.skillPath ?? ""),
+      scope: String(skill.scope ?? group.cwd ?? "全局"),
+    }));
+  });
+}
+
+export async function setRuntimeSkillEnabled(path: string, enabled: boolean): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_skill_enabled", { path, enabled });
+}
+
 export async function listMcpServers(threadId?: string): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { data: [] } };
   return invoke<AppServerMessage>("list_mcp_servers", { threadId: threadId || null });
+}
+
+export async function loadMcpServers(threadId?: string): Promise<RuntimeMcpServer[]> {
+  const response = await listMcpServers(threadId);
+  const source = (response.result ?? response) as Record<string, unknown>;
+  const rows = (Array.isArray(source.data) ? source.data : Array.isArray(source.servers) ? source.servers : []) as Array<Record<string, unknown>>;
+  return rows.map((server) => {
+    const tools = Array.isArray(server.tools) ? server.tools : [];
+    return {
+      name: String(server.name ?? server.serverName ?? "未命名 MCP"),
+      status: String(server.status ?? server.connectionStatus ?? "unknown"),
+      authStatus: String(server.authStatus ?? server.auth_status ?? "unknown"),
+      toolCount: Number(server.toolCount ?? tools.length ?? 0),
+    };
+  });
+}
+
+export async function readRuntimeAccount(): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { account: { type: "local", email: "本地预览" }, requiresOpenaiAuth: false } };
+  return invoke<AppServerMessage>("read_account");
+}
+
+export async function readRuntimeUsage(): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { rateLimits: [] } };
+  return invoke<AppServerMessage>("read_account_usage");
+}
+
+export async function listCollaborationModes(): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { data: [{ name: "default", mode: "default" }, { name: "plan", mode: "plan" }] } };
+  return invoke<AppServerMessage>("list_collaboration_modes");
+}
+
+export async function readEffectiveConfig(): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { config: { approvalPolicy: "unlessTrusted", sandboxMode: "workspaceWrite" } } };
+  return invoke<AppServerMessage>("read_effective_config");
 }
 
 export async function onAppServerNotification(handler: (message: AppServerMessage) => void): Promise<UnlistenFn> {
