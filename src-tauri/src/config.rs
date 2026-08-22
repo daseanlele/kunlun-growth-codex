@@ -182,14 +182,27 @@ pub fn read_api_key(provider: &ProviderConfig) -> Result<Option<String>, String>
 }
 
 pub fn delete_api_key(profile_id: &str) -> Result<(), String> {
-    let user = if profile_id.trim().is_empty() || profile_id == "default" {
+    let is_default = profile_id.trim().is_empty() || profile_id == "default";
+    let user = if is_default {
         format!("provider:{}", default_profile_id())
     } else {
         format!("provider:{profile_id}")
     };
     let entry = keyring::Entry::new(KEYRING_SERVICE, &user).map_err(|error| error.to_string())?;
     match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(error) => return Err(error.to_string()),
     }
+
+    // Older releases stored the default key under a shared username. Delete it too,
+    // otherwise a deleted default profile could silently fall back to that credential.
+    if is_default {
+        let legacy = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+            .map_err(|error| error.to_string())?;
+        match legacy.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
 }
