@@ -110,8 +110,14 @@ pub fn cancel_turn(app: AppHandle, thread_id: String, turn_id: String) -> Result
     Ok(json!({ "turn": { "id": turn_id, "status": "interrupted" } }))
 }
 
-pub fn discover_models(provider: &ProviderConfig) -> Result<Vec<String>, String> {
-    let secret = config::read_api_key(provider)?
+pub fn discover_models(
+    provider: &ProviderConfig,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let secret = api_key
+        .filter(|key| !key.trim().is_empty())
+        .map(|key| key.trim().to_string())
+        .or(config::read_api_key(provider)?)
         .ok_or_else(|| format!("{} 尚未配置 API Key", provider.display_name))?;
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

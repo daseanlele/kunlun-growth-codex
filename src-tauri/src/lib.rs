@@ -356,8 +356,11 @@ fn activate_provider_profile(app: AppHandle, profile_id: String) -> Result<Provi
 }
 
 #[tauri::command]
-fn discover_provider_models(app: AppHandle) -> Result<Vec<String>, String> {
-    direct_adapter::discover_models(&config::load(&app)?)
+fn discover_provider_models(
+    config: ProviderConfig,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    direct_adapter::discover_models(&config, api_key)
 }
 
 #[tauri::command]
