@@ -39,6 +39,9 @@ export interface TerminalOutputEvent { id: string; stream: "stdout" | "stderr"; 
 export interface TerminalExitEvent { id: string; code: number | null }
 export interface RuntimeSkill { name: string; description: string; enabled: boolean; path: string; scope: string }
 export interface RuntimeMcpServer { name: string; status: string; authStatus: string; toolCount: number }
+export interface KnowledgeDocument { id: string; source: string; path: string; title: string; updatedAtMs: number; bytes: number }
+export interface KnowledgeScan { source: string; root: string; documents: KnowledgeDocument[]; skipped: number }
+export interface KnowledgeHit { document: KnowledgeDocument; excerpt: string; line: number }
 export interface DirectMessage { role: "user" | "assistant"; content: string }
 
 const webFallback: RuntimeSnapshot = {
@@ -72,6 +75,16 @@ export async function stopRuntime(): Promise<RuntimeSnapshot> {
 export async function getDshWebUrl(): Promise<string> {
   if (!isTauri()) return "http://127.0.0.1:43117";
   return invoke<string>("dsh_web_url");
+}
+
+export async function scanObsidianVault(vault: string): Promise<KnowledgeScan> {
+  if (!isTauri()) return { source: "obsidian-local", root: vault, documents: [], skipped: 0 };
+  return invoke<KnowledgeScan>("scan_obsidian_vault", { vault });
+}
+
+export async function searchObsidianVault(vault: string, query: string): Promise<KnowledgeHit[]> {
+  if (!isTauri()) return [];
+  return invoke<KnowledgeHit[]>("search_obsidian_vault", { vault, query });
 }
 
 export async function getPreferredRuntimeEngine(): Promise<RuntimeEngine> {

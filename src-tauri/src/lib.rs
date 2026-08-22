@@ -1,6 +1,7 @@
 mod config;
 mod direct_adapter;
 mod governance;
+mod knowledge;
 mod runtime;
 mod workspace;
 
@@ -412,6 +413,19 @@ fn read_workspace_file(cwd: String, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn scan_obsidian_vault(vault: String) -> Result<knowledge::KnowledgeScan, String> {
+    knowledge::scan_obsidian_vault(&vault)
+}
+
+#[tauri::command]
+fn search_obsidian_vault(
+    vault: String,
+    query: String,
+) -> Result<Vec<knowledge::KnowledgeHit>, String> {
+    knowledge::search_obsidian_vault(&vault, &query)
+}
+
+#[tauri::command]
 fn read_git_diff(cwd: String) -> Result<String, String> {
     workspace::git_diff(&cwd)
 }
@@ -622,6 +636,8 @@ pub fn run() {
             delete_provider_secret,
             list_workspace_files,
             read_workspace_file,
+            scan_obsidian_vault,
+            search_obsidian_vault,
             read_git_diff,
             run_terminal_command,
             stop_terminal_command,

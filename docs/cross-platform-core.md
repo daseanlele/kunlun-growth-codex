@@ -19,3 +19,8 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml
 ```
 
 完整 DSH 依赖锁和离线包缓存是正式 Windows 安装器的发布前门禁；不得以用户机器的全局 Node、全局 `dsh` 或 `npx` 代替。
+
+## 已实现连接器
+
+- **Obsidian 本地知识库**：原生核心提供 vault 扫描和全文检索命令。只读取用户明确选择的目录；只索引 Markdown；跳过 `.obsidian`、`.git`、`node_modules`、附件目录和符号链接；单文件与总文件数均有限制。它不要求 API 凭据，也不会将笔记上传。
+- **飞书开放平台**：已纳入连接器契约与凭据/审批模型；实际租户 OAuth、增量同步和飞书 API 回归将在企业应用凭据可用后接入，不能用个人 CLI 配置替代。
