@@ -133,22 +133,24 @@ pub fn read_workspace_file(cwd: &str, relative_path: &str) -> Result<String, Str
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Replaces the contents of an existing, non-binary file inside the selected workspace.
+/// Creates or replaces a non-binary UTF-8 file inside the selected workspace.
 /// Callers are responsible for obtaining an explicit user approval before invoking this.
 pub fn write_workspace_file(cwd: &str, relative_path: &str, content: &str) -> Result<(), String> {
     if content.len() > MAX_FILE_BYTES as usize {
         return Err("File content exceeds the 1 MB write limit".to_string());
     }
     let root = canonical_root(cwd)?;
-    let path = resolve_inside(&root, relative_path)?;
-    let metadata =
-        fs::metadata(&path).map_err(|error| format!("Unable to read file metadata: {error}"))?;
-    if !metadata.is_file() {
-        return Err("Selected path is not a file".to_string());
-    }
-    let existing = fs::read(&path).map_err(|error| format!("Unable to read file: {error}"))?;
-    if existing.iter().take(8_192).any(|byte| *byte == 0) {
-        return Err("Binary files cannot be overwritten".to_string());
+    let path = resolve_write_path(&root, relative_path)?;
+    if path.exists() {
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("Unable to read file metadata: {error}"))?;
+        if !metadata.is_file() {
+            return Err("Selected path is not a file".to_string());
+        }
+        let existing = fs::read(&path).map_err(|error| format!("Unable to read file: {error}"))?;
+        if existing.iter().take(8_192).any(|byte| *byte == 0) {
+            return Err("Binary files cannot be overwritten".to_string());
+        }
     }
     let temporary = path.with_extension(format!(
         "{}.kunlun-tmp",
@@ -201,6 +203,46 @@ fn resolve_inside(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
         return Err("Path escapes the selected workspace".to_string());
     }
     Ok(resolved)
+}
+
+fn resolve_write_path(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let relative = Path::new(relative_path);
+    if relative_path.trim().is_empty() || relative.is_absolute() {
+        return Err("Write path must be a non-empty relative path".to_string());
+    }
+    if relative
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("Write path must not contain parent-directory traversal".to_string());
+    }
+    let candidate = root.join(relative);
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "Write path has no parent directory".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create parent directories: {error}"))?;
+    let parent = fs::canonicalize(parent)
+        .map_err(|error| format!("Unable to resolve parent directory: {error}"))?;
+    if !parent.starts_with(root) {
+        return Err("Path escapes the selected workspace".to_string());
+    }
+    let path = parent.join(
+        candidate
+            .file_name()
+            .ok_or_else(|| "Write path has no file name".to_string())?,
+    );
+    if path.exists() {
+        let resolved = fs::canonicalize(&path)
+            .map_err(|error| format!("Unable to resolve workspace path: {error}"))?;
+        if !resolved.starts_with(root) {
+            return Err("Path escapes the selected workspace".to_string());
+        }
+        Ok(resolved)
+    } else {
+        Ok(path)
+    }
 }
 
 fn walk(
@@ -361,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_existing_text_file_but_not_new_or_escaping_paths() {
+    fn writes_text_files_inside_workspace_and_rejects_escaping_paths() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -371,7 +413,11 @@ mod tests {
         fs::write(root.join("note.txt"), "before").unwrap();
         write_workspace_file(root.to_str().unwrap(), "note.txt", "after").unwrap();
         assert_eq!(fs::read_to_string(root.join("note.txt")).unwrap(), "after");
-        assert!(write_workspace_file(root.to_str().unwrap(), "new.txt", "no").is_err());
+        write_workspace_file(root.to_str().unwrap(), "new/note.txt", "new content").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("new/note.txt")).unwrap(),
+            "new content"
+        );
         assert!(write_workspace_file(root.to_str().unwrap(), "../outside.txt", "no").is_err());
         fs::remove_dir_all(root).unwrap();
     }

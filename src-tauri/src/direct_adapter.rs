@@ -282,7 +282,7 @@ fn run_native_agent(
         let mut tool_results = Vec::new();
         for call in outcome.tool_calls {
             let description = if call.name == "write_workspace_file" {
-                "等待用户批准后写入工作区文件"
+                "等待用户批准后创建或写入工作区文件"
             } else {
                 "只读工作区工具"
             };
@@ -386,7 +386,7 @@ fn execute_write_tool(
     let _ = app.emit("app-server-request", json!({
         "id": approval_id,
         "method": "permissions/requestApproval",
-        "params": { "reason": format!("原生模型请求覆盖工作区文件 {path}"), "requestedPermissions": { "writeWorkspaceFile": path }, "cwd": cwd }
+        "params": { "reason": format!("原生模型请求创建或写入工作区文件 {path}"), "requestedPermissions": { "writeWorkspaceFile": path }, "cwd": cwd }
     }));
     let approved = receiver
         .recv_timeout(std::time::Duration::from_secs(300))
@@ -447,7 +447,7 @@ fn native_tools_openai() -> Vec<Value> {
         json!({ "type": "function", "function": { "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
     ];
-    tools.push(json!({ "type": "function", "function": { "name": "write_workspace_file", "description": "覆盖一个已存在的工作区 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得用于创建、删除或重命名文件。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的现有文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } } }));
+    tools.push(json!({ "type": "function", "function": { "name": "write_workspace_file", "description": "创建或覆盖工作区内的 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得删除或重命名文件。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } } }));
     tools
 }
 
@@ -457,7 +457,7 @@ fn native_tools_anthropic() -> Vec<Value> {
         json!({ "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } }),
         json!({ "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
     ];
-    tools.push(json!({ "name": "write_workspace_file", "description": "覆盖一个已存在的工作区 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得用于创建、删除或重命名文件。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的现有文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } }));
+    tools.push(json!({ "name": "write_workspace_file", "description": "创建或覆盖工作区内的 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得删除或重命名文件。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } }));
     tools
 }
 
