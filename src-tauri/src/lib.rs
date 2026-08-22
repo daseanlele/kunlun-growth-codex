@@ -389,8 +389,8 @@ fn discover_provider_models(
 }
 
 #[tauri::command]
-fn delete_provider_secret() -> Result<(), String> {
-    config::delete_api_key()
+fn delete_provider_secret(app: AppHandle) -> Result<(), String> {
+    config::delete_api_key(&config::load(&app)?.id)
 }
 
 #[tauri::command]

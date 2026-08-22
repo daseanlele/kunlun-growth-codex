@@ -181,9 +181,13 @@ pub fn read_api_key(provider: &ProviderConfig) -> Result<Option<String>, String>
     }
 }
 
-pub fn delete_api_key() -> Result<(), String> {
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|error| error.to_string())?;
+pub fn delete_api_key(profile_id: &str) -> Result<(), String> {
+    let user = if profile_id.trim().is_empty() || profile_id == "default" {
+        format!("provider:{}", default_profile_id())
+    } else {
+        format!("provider:{profile_id}")
+    };
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &user).map_err(|error| error.to_string())?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.to_string()),
