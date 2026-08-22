@@ -1,3 +1,4 @@
+use crate::governance::{assess_terminal_command, Decision};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -53,8 +54,9 @@ impl TerminalManager {
     pub fn run(&self, app: AppHandle, cwd: String, command: String) -> Result<String, String> {
         let root = canonical_root(&cwd)?;
         let command = command.trim().to_string();
-        if command.is_empty() || command.len() > 8_192 {
-            return Err("Command must contain between 1 and 8192 characters".to_string());
+        let policy = assess_terminal_command(&command);
+        if policy.decision != Decision::Allow {
+            return Err(format!("{}；请从受控任务中发起并完成审批", policy.reason));
         }
         let id = format!(
             "terminal-{}",

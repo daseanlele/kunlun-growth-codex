@@ -1,5 +1,6 @@
 mod config;
 mod direct_adapter;
+mod governance;
 mod runtime;
 mod workspace;
 
