@@ -2,7 +2,7 @@
 
 面向企业 AI 落地的开源 Codex 工作台：一键安装，自主配置 API、模型和认证，并把命令审批、工作区隔离与企业策略放在本地可信边界中。
 
-> 当前版本：`0.5.2` 可组合统一智能体工作台预览。Windows/macOS 共用 Tauri 桌面核心，以 Codex App Server 为主运行时；检测到本机、系统 PATH 或已捆绑的 DeepSeek Harness `dsh-acp` 后，DeepSeek 档案会自动走 ACP 适配层，不向普通用户暴露内核切换。未发现 Harness 时则使用受控原生 API 适配器。支持审批队列、Codex Review、搜索/归档/置顶、持久目标、任务分叉与实时追加指令、沙箱 PTY、图片输入、显式 Skill 调用、MCP 状态、账户与用量、工作区文件预览与 Git Diff 审阅，以及可显示、隐藏和排序的功能积木；HarmonyOS 提供连接企业 Agent Gateway 的原生 ArkTS 伴生端。
+> 当前版本：`0.5.3` 可组合统一智能体工作台预览。Windows/macOS 共用 Tauri 桌面核心，以 Codex App Server 为主运行时；检测到本机、系统 PATH 或已捆绑的 DeepSeek Harness `dsh-acp` 后，DeepSeek 档案会自动走 ACP 适配层，不向普通用户暴露内核切换。未发现 Harness 时则使用受控原生 API 适配器。支持审批队列、Codex Review、搜索/归档/置顶、持久目标、任务分叉与实时追加指令、沙箱 PTY、图片输入、显式 Skill 调用、MCP 状态、账户与用量、工作区文件预览与 Git Diff 审阅，以及可显示、隐藏和排序的功能积木；HarmonyOS 提供连接企业 Agent Gateway 的原生 ArkTS 伴生端。
 
 ## 已实现
 
