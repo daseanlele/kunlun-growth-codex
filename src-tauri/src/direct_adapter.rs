@@ -328,6 +328,9 @@ fn execute_tool(
     if call.name == "write_workspace_file" {
         return execute_write_tool(app, cwd, thread_id, turn_id, &call.id, &call.arguments);
     }
+    if call.name == "run_workspace_check" {
+        return execute_check_tool(app, cwd, thread_id, turn_id, &call.id, &call.arguments);
+    }
     let name = &call.name;
     let arguments = &call.arguments;
     let result = match name.as_str() {
@@ -379,6 +382,51 @@ fn execute_tool(
         _ => Err(format!("不允许的只读工具：{name}")),
     };
     result.unwrap_or_else(|error| format!("工具执行失败：{error}"))
+}
+
+fn execute_check_tool(
+    app: &AppHandle,
+    cwd: &str,
+    _thread_id: &str,
+    turn_id: &str,
+    call_id: &str,
+    arguments: &str,
+) -> String {
+    let task = serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("task")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let Some(task) = task else {
+        return "run_workspace_check 需要 task 参数".to_string();
+    };
+    let approval_id = format!("native-approval-{turn_id}-{call_id}");
+    let (sender, receiver) = mpsc::channel();
+    if approvals()
+        .lock()
+        .map(|mut items| items.insert(approval_id.clone(), sender))
+        .is_err()
+    {
+        return "无法创建命令审批".to_string();
+    }
+    let _ = app.emit("app-server-request", json!({ "id": approval_id, "method": "permissions/requestApproval", "params": { "reason": format!("原生模型请求运行受限工作区检查 {task}"), "requestedPermissions": { "runWorkspaceCheck": task }, "command": task, "cwd": cwd } }));
+    let approved = receiver
+        .recv_timeout(std::time::Duration::from_secs(300))
+        .ok()
+        .and_then(|result| result.get("permissions").cloned())
+        .map(|permissions| permissions != json!({}))
+        .unwrap_or(false);
+    if let Ok(mut items) = approvals().lock() {
+        items.remove(&approval_id);
+    }
+    if !approved {
+        return "用户未批准运行工作区检查".to_string();
+    }
+    workspace::run_workspace_check(cwd, &task)
+        .unwrap_or_else(|error| format!("检查执行失败：{error}"))
 }
 
 fn execute_write_tool(
@@ -492,6 +540,7 @@ fn native_tools_openai() -> Vec<Value> {
         json!({ "type": "function", "function": { "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } } }),
         json!({ "type": "function", "function": { "name": "search_workspace", "description": "在工作区内全文搜索文本并返回匹配行。可选 path 必须是工作区内的现有路径。", "parameters": { "type": "object", "properties": { "query": { "type": "string" }, "path": { "type": "string" } }, "required": ["query"], "additionalProperties": false } } }),
+        json!({ "type": "function", "function": { "name": "run_workspace_check", "description": "请求运行一个受限且需用户批准的工作区检查。task 仅可为 git_status、git_diff_check、npm_test 或 cargo_test。", "parameters": { "type": "object", "properties": { "task": { "type": "string", "enum": ["git_status", "git_diff_check", "npm_test", "cargo_test"] } }, "required": ["task"], "additionalProperties": false } } }),
     ];
     tools.push(json!({ "type": "function", "function": { "name": "write_workspace_file", "description": "创建或覆盖工作区内的 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得删除或重命名文件。", "parameters": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } } }));
     tools
@@ -503,6 +552,7 @@ fn native_tools_anthropic() -> Vec<Value> {
         json!({ "name": "read_workspace_file", "description": "读取用户已选择工作区内的 UTF-8 文本文件。仅在需要具体内容时调用。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的路径" } }, "required": ["path"], "additionalProperties": false } }),
         json!({ "name": "read_git_diff", "description": "读取当前工作区未提交的 Git diff。", "input_schema": { "type": "object", "properties": {}, "additionalProperties": false } }),
         json!({ "name": "search_workspace", "description": "在工作区内全文搜索文本并返回匹配行。可选 path 必须是工作区内的现有路径。", "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "path": { "type": "string" } }, "required": ["query"], "additionalProperties": false } }),
+        json!({ "name": "run_workspace_check", "description": "请求运行一个受限且需用户批准的工作区检查。task 仅可为 git_status、git_diff_check、npm_test 或 cargo_test。", "input_schema": { "type": "object", "properties": { "task": { "type": "string", "enum": ["git_status", "git_diff_check", "npm_test", "cargo_test"] } }, "required": ["task"], "additionalProperties": false } }),
     ];
     tools.push(json!({ "name": "write_workspace_file", "description": "创建或覆盖工作区内的 UTF-8 文本文件。调用后必须等待用户在桌面端明确批准；不得删除或重命名文件。", "input_schema": { "type": "object", "properties": { "path": { "type": "string", "description": "相对于工作区根目录的文件路径" }, "content": { "type": "string", "description": "写入后的完整文件内容" } }, "required": ["path", "content"], "additionalProperties": false } }));
     tools

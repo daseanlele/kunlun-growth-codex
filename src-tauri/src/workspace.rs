@@ -17,6 +17,7 @@ const MAX_FILES: usize = 5_000;
 const MAX_FILE_BYTES: u64 = 1_048_576;
 const MAX_DIFF_BYTES: usize = 2_097_152;
 const MAX_SEARCH_BYTES: usize = 262_144;
+const MAX_COMMAND_BYTES: usize = 262_144;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,6 +228,36 @@ pub fn search_workspace(
         }
     }
     Ok(output)
+}
+
+pub fn run_workspace_check(cwd: &str, task: &str) -> Result<String, String> {
+    let root = canonical_root(cwd)?;
+    let (program, args): (&str, &[&str]) = match task {
+        "git_status" => ("git", &["status", "--short"]),
+        "git_diff_check" => ("git", &["diff", "--check"]),
+        "npm_test" => ("npm", &["test", "--", "--run"]),
+        "cargo_test" => ("cargo", &["test"]),
+        _ => return Err("Unsupported workspace check".to_string()),
+    };
+    let output = hidden_command(program)
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("Unable to run workspace check: {error}"))?;
+    let mut bytes = [output.stdout, output.stderr].concat();
+    if bytes.len() > MAX_COMMAND_BYTES {
+        bytes.truncate(MAX_COMMAND_BYTES);
+    }
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if output.status.success() {
+        Ok(text)
+    } else {
+        Err(if text.trim().is_empty() {
+            format!("{task} exited with {:?}", output.status.code())
+        } else {
+            text
+        })
+    }
 }
 
 fn canonical_root(cwd: &str) -> Result<PathBuf, String> {
