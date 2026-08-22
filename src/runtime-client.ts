@@ -38,6 +38,7 @@ export interface TerminalOutputEvent { id: string; stream: "stdout" | "stderr"; 
 export interface TerminalExitEvent { id: string; code: number | null }
 export interface RuntimeSkill { name: string; description: string; enabled: boolean; path: string; scope: string }
 export interface RuntimeMcpServer { name: string; status: string; authStatus: string; toolCount: number }
+export interface DirectMessage { role: "user" | "assistant"; content: string }
 
 const webFallback: RuntimeSnapshot = {
   status: "stopped",
@@ -97,9 +98,9 @@ export async function createAgentThread(cwd: string, model?: string, engine: Run
   return invoke<AppServerMessage>("create_thread", { cwd, model: model || null, engine });
 }
 
-export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string, effort?: string, imagePaths: string[] = [], skill?: Pick<RuntimeSkill, "name" | "path">): Promise<AppServerMessage> {
+export async function startAgentTurn(threadId: string, cwd: string, text: string, model?: string, effort?: string, imagePaths: string[] = [], skill?: Pick<RuntimeSkill, "name" | "path">, history: DirectMessage[] = []): Promise<AppServerMessage> {
   if (!isTauri()) return { result: { turn: { id: "web-preview-turn" } } };
-  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null, effort: effort || null, imagePaths, skillName: skill?.name || null, skillPath: skill?.path || null });
+  return invoke<AppServerMessage>("start_turn", { threadId, cwd, text, model: model || null, effort: effort || null, imagePaths, skillName: skill?.name || null, skillPath: skill?.path || null, history });
 }
 
 export async function listAgentThreads(engine: RuntimeEngine = "codex", filters: { searchTerm?: string; archived?: boolean; isPinned?: boolean } = {}): Promise<RuntimeSession[]> {

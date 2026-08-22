@@ -238,10 +238,18 @@ fn start_turn(
     image_paths: Option<Vec<String>>,
     skill_name: Option<String>,
     skill_path: Option<String>,
+    history: Option<Vec<direct_adapter::ConversationMessage>>,
 ) -> Result<Value, String> {
     let provider = config::load(&app)?;
     if provider.adapter != "codex-responses" {
-        return direct_adapter::start_turn(app, provider, thread_id, text, model);
+        return direct_adapter::start_turn(
+            app,
+            provider,
+            thread_id,
+            text,
+            model,
+            history.unwrap_or_default(),
+        );
     }
     if manager.engine().map_err(|error| error.to_string())? == "deepseek-harness" {
         return manager

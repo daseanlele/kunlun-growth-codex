@@ -1,4 +1,5 @@
 use crate::config::{self, ProviderConfig};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -14,12 +15,20 @@ fn cancellations() -> &'static Mutex<HashMap<String, Arc<std::sync::atomic::Atom
     CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+}
+
 pub fn start_turn(
     app: AppHandle,
     provider: ProviderConfig,
     thread_id: String,
     text: String,
     model_override: Option<String>,
+    history: Vec<ConversationMessage>,
 ) -> Result<Value, String> {
     if text.trim().is_empty() {
         return Err("Message cannot be empty".to_string());
@@ -51,7 +60,7 @@ pub fn start_turn(
         let stream_thread_id = thread_id.clone();
         let stream_turn_id = turn_id.clone();
         let stream_cancellation = cancellation.clone();
-        let result = stream_completion(&provider, &model, &text, move |delta| {
+        let result = stream_completion(&provider, &model, &text, &history, move |delta| {
             if stream_cancellation.load(Ordering::Relaxed) {
                 return;
             }
@@ -175,6 +184,7 @@ fn stream_completion(
     provider: &ProviderConfig,
     model: &str,
     prompt: &str,
+    history: &[ConversationMessage],
     on_delta: impl FnMut(String),
 ) -> Result<(), String> {
     let secret = config::read_api_key(provider)?
@@ -189,7 +199,7 @@ fn stream_completion(
             .post(url)
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": [{ "role": "user", "content": prompt }] }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": conversation_messages(history, prompt) }))
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
         return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
@@ -201,10 +211,17 @@ fn stream_completion(
     let response = client
         .post(url)
         .bearer_auth(secret)
-        .json(&json!({ "model": model, "messages": [{ "role": "user", "content": prompt }], "stream": true }))
+        .json(&json!({ "model": model, "messages": conversation_messages(history, prompt), "stream": true }))
         .send()
         .map_err(|error| format!("模型请求失败：{error}"))?;
     stream_sse_response(response, SseProtocol::OpenAiChat, on_delta)
+}
+
+fn conversation_messages(history: &[ConversationMessage], prompt: &str) -> Vec<Value> {
+    history.iter().filter(|item| matches!(item.role.as_str(), "user" | "assistant") && !item.content.trim().is_empty())
+        .rev().take(48).collect::<Vec<_>>().into_iter().rev()
+        .map(|item| json!({ "role": item.role, "content": item.content.chars().take(16_000).collect::<String>() }))
+        .chain(std::iter::once(json!({ "role": "user", "content": prompt }))).collect()
 }
 
 enum SseProtocol {
