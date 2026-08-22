@@ -1,6 +1,7 @@
 use crate::config::{self, ProviderConfig};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
@@ -45,14 +46,23 @@ pub fn start_turn(
     );
 
     std::thread::spawn(move || {
-        let result = request_completion(&provider, &model, &text);
+        let item_id = format!("{turn_id}-answer");
+        let stream_app = app.clone();
+        let stream_thread_id = thread_id.clone();
+        let stream_turn_id = turn_id.clone();
+        let stream_cancellation = cancellation.clone();
+        let result = stream_completion(&provider, &model, &text, move |delta| {
+            if stream_cancellation.load(Ordering::Relaxed) {
+                return;
+            }
+            let _ = stream_app.emit("app-server-notification", json!({
+                "method": "item/agentMessage/delta",
+                "params": { "threadId": stream_thread_id, "turnId": stream_turn_id, "itemId": item_id, "delta": delta }
+            }));
+        });
         let cancelled = cancellation.load(Ordering::Relaxed);
         match result {
-            Ok(answer) if !cancelled => {
-                let _ = app.emit("app-server-notification", json!({
-                    "method": "item/agentMessage/delta",
-                    "params": { "threadId": thread_id, "turnId": turn_id, "itemId": format!("{turn_id}-answer"), "delta": answer }
-                }));
+            Ok(()) if !cancelled => {
                 let _ = app.emit("app-server-notification", json!({
                     "method": "turn/completed",
                     "params": { "threadId": thread_id, "turn": { "id": turn_id, "status": "completed" } }
@@ -100,11 +110,12 @@ pub fn cancel_turn(app: AppHandle, thread_id: String, turn_id: String) -> Result
     Ok(json!({ "turn": { "id": turn_id, "status": "interrupted" } }))
 }
 
-fn request_completion(
+fn stream_completion(
     provider: &ProviderConfig,
     model: &str,
     prompt: &str,
-) -> Result<String, String> {
+    on_delta: impl FnMut(String),
+) -> Result<(), String> {
     let secret = config::read_api_key(provider)?
         .ok_or_else(|| format!("{} 尚未配置 API Key", provider.display_name))?;
     let client = reqwest::blocking::Client::builder()
@@ -117,10 +128,10 @@ fn request_completion(
             .post(url)
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": model, "max_tokens": 8192, "messages": [{ "role": "user", "content": prompt }] }))
+            .json(&json!({ "model": model, "max_tokens": 8192, "stream": true, "messages": [{ "role": "user", "content": prompt }] }))
             .send()
             .map_err(|error| format!("Claude 请求失败：{error}"))?;
-        return parse_anthropic_response(response);
+        return stream_sse_response(response, SseProtocol::Anthropic, on_delta);
     }
     let url = format!(
         "{}/chat/completions",
@@ -129,49 +140,59 @@ fn request_completion(
     let response = client
         .post(url)
         .bearer_auth(secret)
-        .json(&json!({ "model": model, "messages": [{ "role": "user", "content": prompt }], "stream": false }))
+        .json(&json!({ "model": model, "messages": [{ "role": "user", "content": prompt }], "stream": true }))
         .send()
         .map_err(|error| format!("模型请求失败：{error}"))?;
-    parse_chat_response(response)
+    stream_sse_response(response, SseProtocol::OpenAiChat, on_delta)
 }
 
-fn response_json(response: reqwest::blocking::Response) -> Result<Value, String> {
+enum SseProtocol {
+    Anthropic,
+    OpenAiChat,
+}
+
+fn stream_sse_response(
+    response: reqwest::blocking::Response,
+    protocol: SseProtocol,
+    mut on_delta: impl FnMut(String),
+) -> Result<(), String> {
     let status = response.status();
-    let body = response.text().map_err(|error| error.to_string())?;
-    let value: Value = serde_json::from_str(&body)
-        .map_err(|_| format!("模型服务返回了无法解析的响应（HTTP {status}）"))?;
     if !status.is_success() {
+        let body = response.text().map_err(|error| error.to_string())?;
+        let value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         let message = value
             .pointer("/error/message")
             .and_then(Value::as_str)
             .unwrap_or("未知服务错误");
         return Err(format!("模型服务返回 HTTP {status}：{message}"));
     }
-    Ok(value)
-}
-
-fn parse_chat_response(response: reqwest::blocking::Response) -> Result<String, String> {
-    let value = response_json(response)?;
-    value
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "模型服务没有返回文本内容".to_string())
-}
-
-fn parse_anthropic_response(response: reqwest::blocking::Response) -> Result<String, String> {
-    let value = response_json(response)?;
-    let text = value
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if text.is_empty() {
-        Err("Claude 没有返回文本内容".to_string())
+    let mut emitted = false;
+    for line in BufReader::new(response).lines() {
+        let line = line.map_err(|error| format!("模型流读取失败：{error}"))?;
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if data == "[DONE]" {
+            break;
+        }
+        let value: Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let delta = match protocol {
+            SseProtocol::Anthropic => value.pointer("/delta/text").and_then(Value::as_str),
+            SseProtocol::OpenAiChat => value
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str),
+        };
+        if let Some(delta) = delta.filter(|value| !value.is_empty()) {
+            emitted = true;
+            on_delta(delta.to_string());
+        }
+    }
+    if emitted {
+        Ok(())
     } else {
-        Ok(text)
+        Err("模型服务没有返回文本内容或不支持流式输出".to_string())
     }
 }
