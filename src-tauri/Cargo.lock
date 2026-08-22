@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "kunlun-growth-codex"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "keyring",
  "serde",

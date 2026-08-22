@@ -24,6 +24,7 @@ export const featureBlocks: FeatureBlock[] = [
   { id: "models", name: "模型与内核", description: "选择模型、推理强度与代理内核", slot: "navigation", icon: "⌁", defaultEnabled: true, engines: ["codex", "deepseek-harness"] },
   { id: "governance", name: "企业策略", description: "审批、沙箱、网络与凭据策略", slot: "navigation", icon: "◈", defaultEnabled: true, engines: ["codex", "deepseek-harness"] },
   { id: "runtime", name: "运行环境", description: "显示内核连接状态与版本", slot: "inspector", icon: "●", defaultEnabled: true, engines: ["codex", "deepseek-harness"] },
+  { id: "files", name: "文件浏览器", description: "浏览、预览并用 @ 引用工作区文件", slot: "inspector", icon: "▤", defaultEnabled: true, engines: ["codex", "deepseek-harness"] },
   { id: "workspace", name: "工作区", description: "显示并切换当前代码项目", slot: "inspector", icon: "▰", defaultEnabled: true, required: true, engines: ["codex", "deepseek-harness"] },
   { id: "metrics", name: "任务统计", description: "命令、工具与文件变更统计", slot: "inspector", icon: "▦", defaultEnabled: true, engines: ["codex", "deepseek-harness"] },
   { id: "diff", name: "Diff 审阅", description: "查看任务产生的统一代码差异", slot: "inspector", icon: "±", defaultEnabled: true, engines: ["codex"] },

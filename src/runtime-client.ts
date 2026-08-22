@@ -29,6 +29,10 @@ export interface AppServerMessage {
   result?: Record<string, unknown>;
 }
 
+export interface WorkspaceEntry { path: string; name: string; isDir: boolean; size: number }
+export interface TerminalOutputEvent { id: string; stream: "stdout" | "stderr"; chunk: string }
+export interface TerminalExitEvent { id: string; code: number | null }
+
 const webFallback: RuntimeSnapshot = {
   status: "stopped",
   pid: null,
@@ -130,6 +134,57 @@ export async function interruptAgentTurn(threadId: string, turnId: string): Prom
 export async function respondToApproval(id: string | number, decision: "accept" | "decline"): Promise<void> {
   if (!isTauri()) return;
   await invoke("respond_server_request", { id, result: { decision } });
+}
+
+export async function listWorkspaceFiles(cwd: string): Promise<WorkspaceEntry[]> {
+  if (!isTauri()) return [
+    { path: "src/App.tsx", name: "App.tsx", isDir: false, size: 18420 },
+    { path: "src/runtime-client.ts", name: "runtime-client.ts", isDir: false, size: 7200 },
+    { path: "src/domain", name: "domain", isDir: true, size: 0 },
+    { path: "src/domain/runtime.ts", name: "runtime.ts", isDir: false, size: 9300 },
+    { path: "README.md", name: "README.md", isDir: false, size: 4100 },
+  ];
+  return invoke<WorkspaceEntry[]>("list_workspace_files", { cwd });
+}
+
+export async function readWorkspaceFile(cwd: string, path: string): Promise<string> {
+  if (!isTauri()) return `// ${path}\n// 桌面版将在这里显示工作区中的真实文件内容。`;
+  return invoke<string>("read_workspace_file", { cwd, path });
+}
+
+export async function readGitDiff(cwd: string): Promise<string> {
+  if (!isTauri()) return "diff --git a/src/App.tsx b/src/App.tsx\n--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1,3 +1,4 @@\n+// 昆仑增长 Diff 审阅预览\n";
+  return invoke<string>("read_git_diff", { cwd });
+}
+
+export async function runTerminalCommand(cwd: string, command: string): Promise<string> {
+  if (!isTauri()) return `web-terminal-${Date.now()}`;
+  return invoke<string>("run_terminal_command", { cwd, command });
+}
+
+export async function stopTerminalCommand(id: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("stop_terminal_command", { id });
+}
+
+export async function onTerminalOutput(handler: (event: TerminalOutputEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<TerminalOutputEvent>("terminal-output", (event) => handler(event.payload));
+}
+
+export async function onTerminalExit(handler: (event: TerminalExitEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<TerminalExitEvent>("terminal-exit", (event) => handler(event.payload));
+}
+
+export async function listRuntimeSkills(cwd: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { data: [{ cwd, skills: [{ name: "skill-creator", description: "创建和维护可复用工作流", enabled: true }] }] } };
+  return invoke<AppServerMessage>("list_skills", { cwd });
+}
+
+export async function listMcpServers(threadId?: string): Promise<AppServerMessage> {
+  if (!isTauri()) return { result: { data: [] } };
+  return invoke<AppServerMessage>("list_mcp_servers", { threadId: threadId || null });
 }
 
 export async function onAppServerNotification(handler: (message: AppServerMessage) => void): Promise<UnlistenFn> {

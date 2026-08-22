@@ -3,10 +3,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -138,7 +138,10 @@ impl RuntimeManager {
         let provider = config::load(app).map_err(RuntimeError::Protocol)?;
         let mut command = Command::new(&binary);
         if engine == "codex" {
-            command.arg("app-server").arg("--stdio").arg("--strict-config");
+            command
+                .arg("app-server")
+                .arg("--stdio")
+                .arg("--strict-config");
         }
         if let Ok(config_dir) = app.path().app_config_dir() {
             let codex_home = config_dir.join("codex-home");
@@ -148,12 +151,24 @@ impl RuntimeManager {
         apply_provider_config(&mut command, &provider, engine)?;
         #[cfg(windows)]
         command.creation_flags(0x08000000);
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = command.spawn()?;
-        let stdin = child.stdin.take().ok_or_else(|| RuntimeError::Protocol("stdin unavailable".to_string()))?;
-        let stdout = child.stdout.take().ok_or_else(|| RuntimeError::Protocol("stdout unavailable".to_string()))?;
-        let stderr = child.stderr.take().ok_or_else(|| RuntimeError::Protocol("stderr unavailable".to_string()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("stdin unavailable".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("stdout unavailable".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("stderr unavailable".to_string()))?;
 
         {
             let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
@@ -198,7 +213,10 @@ impl RuntimeManager {
     }
 
     pub fn engine(&self) -> Result<String, RuntimeError> {
-        self.state.lock().map(|state| state.engine.clone()).map_err(|_| RuntimeError::StatePoisoned)
+        self.state
+            .lock()
+            .map(|state| state.engine.clone())
+            .map_err(|_| RuntimeError::StatePoisoned)
     }
 
     pub fn stop(&self) -> Result<RuntimeSnapshot, RuntimeError> {
@@ -223,7 +241,9 @@ impl RuntimeManager {
             .map_err(|_| RuntimeError::StatePoisoned)?
             .insert(key.clone(), sender);
 
-        if let Err(error) = self.write_message(&json!({ "method": method, "id": id, "params": params })) {
+        if let Err(error) =
+            self.write_message(&json!({ "method": method, "id": id, "params": params }))
+        {
             if let Ok(mut pending) = self.pending.lock() {
                 pending.remove(&key);
             }
@@ -259,20 +279,29 @@ impl RuntimeManager {
             .clone()
             .ok_or(RuntimeError::NotRunning)?;
         let mut guard = writer.lock().map_err(|_| RuntimeError::StatePoisoned)?;
-        serde_json::to_writer(&mut *guard, value).map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+        serde_json::to_writer(&mut *guard, value)
+            .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
         guard.write_all(b"\n")?;
         guard.flush()?;
         Ok(())
     }
 
     fn accept_incoming(&self, message: &Value) -> bool {
-        let Some(id) = message.get("id") else { return false };
-        if message.get("method").is_some() { return false; }
+        let Some(id) = message.get("id") else {
+            return false;
+        };
+        if message.get("method").is_some() {
+            return false;
+        }
         let key = match id {
             Value::String(value) => value.clone(),
             _ => id.to_string(),
         };
-        let sender = self.pending.lock().ok().and_then(|mut pending| pending.remove(&key));
+        let sender = self
+            .pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&key));
         if let Some(sender) = sender {
             let result = if let Some(error) = message.get("error") {
                 Err(error.to_string())
@@ -311,11 +340,15 @@ fn spawn_stdout_reader(app: AppHandle, stdout: impl std::io::Read + Send + 'stat
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             match serde_json::from_str::<Value>(&line) {
                 Ok(message) => {
                     let manager = app.state::<RuntimeManager>();
-                    if manager.accept_incoming(&message) { continue; }
+                    if manager.accept_incoming(&message) {
+                        continue;
+                    }
                     let event = if message.get("id").is_some() && message.get("method").is_some() {
                         "app-server-request"
                     } else {
@@ -335,12 +368,19 @@ fn spawn_stdout_reader(app: AppHandle, stdout: impl std::io::Read + Send + 'stat
 fn spawn_stderr_reader(app: AppHandle, stderr: impl std::io::Read + Send + 'static) {
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = app.emit("runtime-log", json!({ "stream": "stderr", "message": line }));
+            let _ = app.emit(
+                "runtime-log",
+                json!({ "stream": "stderr", "message": line }),
+            );
         }
     });
 }
 
-fn apply_provider_config(command: &mut Command, provider: &config::ProviderConfig, engine: &str) -> Result<(), RuntimeError> {
+fn apply_provider_config(
+    command: &mut Command,
+    provider: &config::ProviderConfig,
+    engine: &str,
+) -> Result<(), RuntimeError> {
     let api_key = config::read_api_key().map_err(RuntimeError::Protocol)?;
     if engine == "deepseek-harness" {
         if let Some(secret) = api_key {
@@ -358,19 +398,30 @@ fn apply_provider_config(command: &mut Command, provider: &config::ProviderConfi
     }
 
     if !provider.model.trim().is_empty() {
-        command.arg("-c").arg(format!("model={}", toml_string(&provider.model)));
+        command
+            .arg("-c")
+            .arg(format!("model={}", toml_string(&provider.model)));
     }
 
     let custom = provider.protocol != "openai" || provider.base_url != "https://api.openai.com/v1";
     if custom {
         command.arg("-c").arg("model_provider=\"enterprise\"");
-        command.arg("-c").arg("model_providers.enterprise.name=\"Enterprise Provider\"");
-        command.arg("-c").arg(format!("model_providers.enterprise.base_url={}", toml_string(&provider.base_url)));
-        command.arg("-c").arg("model_providers.enterprise.wire_api=\"responses\"");
+        command
+            .arg("-c")
+            .arg("model_providers.enterprise.name=\"Enterprise Provider\"");
+        command.arg("-c").arg(format!(
+            "model_providers.enterprise.base_url={}",
+            toml_string(&provider.base_url)
+        ));
+        command
+            .arg("-c")
+            .arg("model_providers.enterprise.wire_api=\"responses\"");
         if provider.protocol == "azure-openai" {
             command.arg("-c").arg("model_providers.enterprise.env_http_headers={\"api-key\"=\"KUNLUN_GROWTH_API_KEY\"}");
         } else {
-            command.arg("-c").arg("model_providers.enterprise.env_key=\"KUNLUN_GROWTH_API_KEY\"");
+            command
+                .arg("-c")
+                .arg("model_providers.enterprise.env_key=\"KUNLUN_GROWTH_API_KEY\"");
         }
     } else if let Some(secret) = api_key {
         command.env("OPENAI_API_KEY", secret);
@@ -394,23 +445,38 @@ fn detect_version(binary: &Path) -> Option<String> {
 fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
     if engine == "deepseek-harness" {
         if let Some(path) = std::env::var_os("KUNLUN_GROWTH_DSH_BINARY").map(PathBuf::from) {
-            if path.is_file() { return Some(path); }
+            if path.is_file() {
+                return Some(path);
+            }
         }
-        let executable = if cfg!(windows) { "dsh-acp.exe" } else { "dsh-acp" };
+        let executable = if cfg!(windows) {
+            "dsh-acp.exe"
+        } else {
+            "dsh-acp"
+        };
         if let Ok(resource_dir) = app.path().resource_dir() {
-            let bundled = resource_dir.join("runtime").join("deepseek-harness").join(executable);
-            if bundled.is_file() { return Some(bundled); }
+            let bundled = resource_dir
+                .join("runtime")
+                .join("deepseek-harness")
+                .join(executable);
+            if bundled.is_file() {
+                return Some(bundled);
+            }
         }
         return None;
     }
     if let Some(path) = std::env::var_os("KUNLUN_GROWTH_CODEX_BINARY").map(PathBuf::from) {
-        if path.is_file() { return Some(path); }
+        if path.is_file() {
+            return Some(path);
+        }
     }
 
     let executable = if cfg!(windows) { "codex.exe" } else { "codex" };
     if let Ok(resource_dir) = app.path().resource_dir() {
         let bundled = resource_dir.join("runtime").join("bin").join(executable);
-        if bundled.is_file() { return Some(bundled); }
+        if bundled.is_file() {
+            return Some(bundled);
+        }
     }
 
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
