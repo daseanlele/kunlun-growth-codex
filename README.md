@@ -10,6 +10,9 @@
 - 官方 Codex App Server 的 stdio JSON-RPC 初始化、线程、任务与流式事件通道；
 - 命令/文件操作审批响应；
 - OpenAI、Azure OpenAI 与 OpenAI-compatible Provider 配置；
+- Codex OAuth、Claude Messages API、DeepSeek/千问/Gemini/OpenRouter Chat Completions 适配器；
+- 多模型档案、独立凭据引用、模型目录读取、流式输出、停止与本地会话历史；
+- 原生模型可显式通过 `@相对路径` 读取受限工作区文件（最多 5 个、每个最多 24,000 字符预览）；
 - API Key 写入 macOS Keychain / Windows Credential Manager，不写入 JSON；
 - Windows NSIS/MSI 与 macOS应用打包基础；
 - HarmonyOS ArkTS Stage 模型客户端（phone/tablet/2in1）；
@@ -48,8 +51,12 @@ npm run mac:build
 - 凭据只在子进程启动时解析，日志和配置不包含明文；
 - HarmonyOS 端只连接 HTTPS 企业网关，访问令牌默认仅保存在会话内。
 
+## 多模型适配边界
+
+Codex / OpenAI Responses 适配器使用 App Server，因此具备完整的代理工具、审批、Skills、MCP、Review 与协作能力。Claude 与 Chat Completions 适配器使用各自原生 API，不会伪装为 Responses 协议；当前已支持流式多轮对话、模型发现、停止与受限 `@文件` 上下文。原生 API 的写文件、执行命令、MCP 与子代理工具循环仍在接入中，未接入前不会绕过企业审批边界。
+
 架构与交付边界见 [`docs/architecture.md`](docs/architecture.md)，版本路线见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## 开源协议与上游
 
-本项目采用 Apache-2.0。Codex 运行时及其依赖遵循各自上游许可证；集成协议参考官方 [Codex App Server 文档](https://learn.chatgpt.com/docs/app-server)。“Codex”是其权利人的产品名称，本项目“昆仑增长”不是 OpenAI 官方发行版。
+本项目采用 Apache-2.0。Codex 运行时及其依赖遵循各自上游许可证；集成协议参考官方 [Codex App Server 文档](https://developers.openai.com/codex/app-server)。“Codex”是其权利人的产品名称，本项目“昆仑增长”不是 OpenAI 官方发行版。

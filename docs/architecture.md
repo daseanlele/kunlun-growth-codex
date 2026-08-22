@@ -6,9 +6,10 @@
 Windows / macOS React WebView
            │ typed Tauri IPC
            ▼
-Rust desktop core ── Runtime Adapter ─┬─ Codex App Server
-  │ policy / vault / approvals        └─ DeepSeek Harness ACP
-  └──────────── HTTPS approved providers ───────────────┘
+Rust desktop core ── Runtime Adapter ─┬─ Codex App Server (Responses)
+  │ policy / vault / approvals        ├─ DeepSeek Harness ACP
+  └──────────── HTTPS providers ──────┼─ Claude Messages
+                                      └─ OpenAI Chat Completions
 
 HarmonyOS ArkTS ── HTTPS + enterprise auth ── Agent Gateway
                                                  │
@@ -28,6 +29,8 @@ HarmonyOS ArkTS ── HTTPS + enterprise auth ── Agent Gateway
 桌面核心依次调用 `initialize`、`initialized`、`thread/start` 与 `turn/start`。上游请求和通知通过 Tauri 事件转发；命令执行与文件变更请求必须由用户或托管策略明确决策。
 
 DeepSeek Harness 通过独立的 ACP JSON-RPC stdio 适配器接入，使用 `session/new` 与 `session/prompt`。每个会话固定一个运行时内核；两套协议在进入界面前归一化为昆仑增长的 Timeline 事件，禁止共享进程状态或直接混写会话日志。
+
+Claude 与 OpenAI-compatible 服务不会被错误地送入 Codex 的 Responses 协议。它们由 Rust 原生 HTTPS 适配器处理身份头、模型发现、SSE 流、取消和本地会话历史；用户显式引用的 `@相对路径` 会在可信核心中受限展开。原生工具循环接入时必须复用审批和工作区隔离，不允许模型直接获得 shell 或任意文件系统权限。
 
 ## 配置优先级
 
