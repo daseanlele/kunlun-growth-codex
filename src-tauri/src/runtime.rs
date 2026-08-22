@@ -470,6 +470,9 @@ fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
                 return Some(bundled);
             }
         }
+        if let Some(path) = find_on_path(executable) {
+            return Some(path);
+        }
         return None;
     }
     if let Some(path) = std::env::var_os("KUNLUN_GROWTH_CODEX_BINARY").map(PathBuf::from) {
@@ -504,6 +507,13 @@ fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
         .join("bin")
         .join(executable);
     development.is_file().then_some(development)
+}
+
+fn find_on_path(executable: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|directory| directory.join(executable))
+        .find(|candidate| candidate.is_file())
 }
 
 pub fn harness_available(app: &AppHandle) -> bool {
