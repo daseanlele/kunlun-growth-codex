@@ -518,4 +518,16 @@ mod tests {
         assert!(search_workspace(root.to_str().unwrap(), "", None).is_err());
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn rejects_workspace_checks_outside_the_allowlist() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("kunlun-check-{suffix}"));
+        fs::create_dir_all(&root).unwrap();
+        assert!(run_workspace_check(root.to_str().unwrap(), "arbitrary_shell").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
