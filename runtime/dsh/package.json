@@ -1,0 +1,14 @@
+{
+  "name": "@kunlun-growth/dsh-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned DeepSeek Harness runtime used by Kunlun Growth Windows distribution.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "web": "dsh web",
+    "version": "dsh --version"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.1-rc.2"
+  }
+}

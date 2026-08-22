@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ pub struct RuntimeSnapshot {
     pub engine: String,
     pub available: bool,
     pub version: Option<String>,
+    pub web_url: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -59,6 +61,7 @@ struct RuntimeState {
     binary: String,
     engine: String,
     version: Option<String>,
+    web_url: Option<String>,
     last_error: Option<String>,
 }
 
@@ -80,6 +83,7 @@ impl Default for RuntimeManager {
                 binary: "codex".to_string(),
                 engine: "codex".to_string(),
                 version: None,
+                web_url: None,
                 last_error: None,
             }),
             pending: Mutex::new(HashMap::new()),
@@ -98,6 +102,7 @@ impl RuntimeManager {
                 engine: "codex".to_string(),
                 available: false,
                 version: None,
+                web_url: None,
                 last_error: Some("Runtime state lock was poisoned".to_string()),
             };
         };
@@ -106,6 +111,7 @@ impl RuntimeManager {
             if let Ok(Some(exit)) = child.try_wait() {
                 state.child = None;
                 state.writer = None;
+                state.web_url = None;
                 if state.status != RuntimeStatus::Stopped {
                     state.status = RuntimeStatus::Error;
                     state.last_error = Some(format!("Codex exited with {exit}"));
@@ -120,6 +126,7 @@ impl RuntimeManager {
             engine: state.engine.clone(),
             available: true,
             version: state.version.clone(),
+            web_url: state.web_url.clone(),
             last_error: state.last_error.clone(),
         }
     }
@@ -136,6 +143,10 @@ impl RuntimeManager {
 
         let binary = resolve_binary(app, engine).ok_or(RuntimeError::BinaryMissing)?;
         let provider = config::load(app).map_err(RuntimeError::Protocol)?;
+        if engine == "deepseek-harness" {
+            return self.start_dsh_web(app, binary, provider);
+        }
+
         let mut command = Command::new(&binary);
         if engine == "codex" {
             command
@@ -219,10 +230,19 @@ impl RuntimeManager {
             .map_err(|_| RuntimeError::StatePoisoned)
     }
 
+    pub fn harness_url(&self) -> Option<String> {
+        self.state.lock().ok().and_then(|state| {
+            (state.engine == "deepseek-harness" && state.status == RuntimeStatus::Ready)
+                .then(|| state.web_url.clone())
+                .flatten()
+        })
+    }
+
     pub fn stop(&self) -> Result<RuntimeSnapshot, RuntimeError> {
         let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
         state.status = RuntimeStatus::Stopped;
         state.writer = None;
+        state.web_url = None;
         if let Some(mut child) = state.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -233,6 +253,11 @@ impl RuntimeManager {
     }
 
     pub fn request(&self, method: &str, params: Value) -> Result<Value, RuntimeError> {
+        if self.engine()? == "deepseek-harness" {
+            return Err(RuntimeError::Protocol(format!(
+                "DeepSeek Harness uses its managed local web runtime; {method} is not an App Server RPC"
+            )));
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let key = id.to_string();
         let (sender, receiver) = mpsc::channel();
@@ -334,6 +359,84 @@ impl RuntimeManager {
         self.fail_pending("Codex App Server connection closed");
         let _ = app.emit("runtime-status", self.snapshot());
     }
+
+    fn start_dsh_web(
+        &self,
+        app: &AppHandle,
+        binary: PathBuf,
+        provider: config::ProviderConfig,
+    ) -> Result<RuntimeSnapshot, RuntimeError> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(RuntimeError::StartFailed)?;
+        let port = listener
+            .local_addr()
+            .map_err(RuntimeError::StartFailed)?
+            .port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}");
+        let mut command = Command::new(&binary);
+        command.arg("web").arg("--port").arg(port.to_string());
+        if let Ok(config_dir) = app.path().app_config_dir() {
+            let dsh_home = config_dir.join("dsh-home");
+            std::fs::create_dir_all(&dsh_home)?;
+            command.env("DSH_HOME", dsh_home);
+        }
+        apply_provider_config(&mut command, &provider, "deepseek-harness")?;
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("DSH stdout unavailable".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("DSH stderr unavailable".to_string()))?;
+        {
+            let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
+            state.binary = binary.display().to_string();
+            state.engine = "deepseek-harness".to_string();
+            state.version = detect_version(&binary);
+            state.web_url = Some(url.clone());
+            state.child = Some(child);
+            state.writer = None;
+        }
+        spawn_runtime_log_reader(app.clone(), "stdout", stdout);
+        spawn_stderr_reader(app.clone(), stderr);
+
+        let address: SocketAddr = format!("127.0.0.1:{port}")
+            .parse()
+            .map_err(|error: std::net::AddrParseError| RuntimeError::Protocol(error.to_string()))?;
+        for _ in 0..40 {
+            if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+                let mut state = self.state.lock().map_err(|_| RuntimeError::StatePoisoned)?;
+                state.status = RuntimeStatus::Ready;
+                drop(state);
+                let snapshot = self.snapshot();
+                let _ = app.emit("dsh-web-ready", json!({ "url": url }));
+                return Ok(snapshot);
+            }
+            let exited = self.state.lock().ok().and_then(|mut state| {
+                state
+                    .child
+                    .as_mut()
+                    .and_then(|child| child.try_wait().ok().flatten())
+            });
+            if let Some(exit) = exited {
+                let _ = self.stop();
+                return Err(RuntimeError::Protocol(format!(
+                    "DSH web process exited with {exit}"
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let _ = self.stop();
+        Err(RuntimeError::Timeout("DSH web health check".to_string()))
+    }
 }
 
 fn spawn_stdout_reader(app: AppHandle, stdout: impl std::io::Read + Send + 'static) {
@@ -372,6 +475,18 @@ fn spawn_stderr_reader(app: AppHandle, stderr: impl std::io::Read + Send + 'stat
                 "runtime-log",
                 json!({ "stream": "stderr", "message": line }),
             );
+        }
+    });
+}
+
+fn spawn_runtime_log_reader(
+    app: AppHandle,
+    stream: &'static str,
+    output: impl std::io::Read + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(output).lines().map_while(Result::ok) {
+            let _ = app.emit("runtime-log", json!({ "stream": stream, "message": line }));
         }
     });
 }
@@ -456,19 +571,28 @@ fn resolve_binary(app: &AppHandle, engine: &str) -> Option<PathBuf> {
                 return Some(path);
             }
         }
-        let executable = if cfg!(windows) {
-            "dsh-acp.exe"
-        } else {
-            "dsh-acp"
-        };
+        let executable = if cfg!(windows) { "dsh.cmd" } else { "dsh" };
         if let Ok(resource_dir) = app.path().resource_dir() {
             let bundled = resource_dir
                 .join("runtime")
-                .join("deepseek-harness")
+                .join("dsh")
+                .join("node_modules")
+                .join(".bin")
                 .join(executable);
             if bundled.is_file() {
                 return Some(bundled);
             }
+        }
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let development = manifest
+            .join("..")
+            .join("runtime")
+            .join("dsh")
+            .join("node_modules")
+            .join(".bin")
+            .join(executable);
+        if development.is_file() {
+            return Some(development);
         }
         if let Some(path) = find_on_path(executable) {
             return Some(path);

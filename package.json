@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "dsh:check": "node scripts/check-dsh-runtime.mjs",
     "protocol:generate": "node scripts/generate-protocol.mjs",
     "tauri": "tauri",
     "desktop:dev": "npm run runtime:prepare && tauri dev",

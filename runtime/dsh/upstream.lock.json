@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "package": "@deepseek-ai/dsh",
+  "version": "0.1.1-rc.2",
+  "dist": {
+    "shasum": "1a5112369f1c46b13a6e6f21de8af5e6afd45074",
+    "integrity": "sha512-UP1UIh6q3Gme/yXRn/QL2P8IsVlv8Shpg22TRJIZPsCRWLm4CBiA1MUvXmJAfsOEETBMLAl+xWPtFw6ICsN3wg=="
+  },
+  "source": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness",
+    "ref": "master",
+    "commit": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+    "license": "MIT"
+  },
+  "verifiedAt": "2026-08-23T00:00:00Z"
+}

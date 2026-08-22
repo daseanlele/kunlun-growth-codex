@@ -69,6 +69,11 @@ export async function stopRuntime(): Promise<RuntimeSnapshot> {
   return invoke<RuntimeSnapshot>("stop_runtime");
 }
 
+export async function getDshWebUrl(): Promise<string> {
+  if (!isTauri()) return "http://127.0.0.1:43117";
+  return invoke<string>("dsh_web_url");
+}
+
 export async function getPreferredRuntimeEngine(): Promise<RuntimeEngine> {
   if (!isTauri()) return "codex";
   return invoke<RuntimeEngine>("preferred_runtime_engine");

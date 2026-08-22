@@ -34,6 +34,13 @@ fn stop_runtime(manager: State<'_, RuntimeManager>) -> Result<RuntimeSnapshot, S
 }
 
 #[tauri::command]
+fn dsh_web_url(manager: State<'_, RuntimeManager>) -> Result<String, String> {
+    manager
+        .harness_url()
+        .ok_or_else(|| "DeepSeek Harness web runtime is not ready".to_string())
+}
+
+#[tauri::command]
 fn preferred_runtime_engine(app: AppHandle) -> String {
     let provider = config::load(&app).unwrap_or_default();
     if provider.provider_id == "deepseek" && runtime::harness_available(&app) {
@@ -588,6 +595,7 @@ pub fn run() {
             runtime_status,
             start_runtime,
             stop_runtime,
+            dsh_web_url,
             preferred_runtime_engine,
             create_thread,
             list_threads,
